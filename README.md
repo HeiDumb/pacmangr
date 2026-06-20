@@ -9,9 +9,11 @@ so password prompts, confirmations, and download progress stay native.
 
 - ASCII/curses TUI with search, installed packages, package details, and logs.
 - Unified search across all detected managers that expose search output.
+- Persistent marked package queue for selecting packages across searches.
 - Installed package inventory across distro managers, language package managers,
   Flatpak, and local AppImages.
 - Native install/remove/update execution through the real backend command.
+- Default-yes confirmations: pressing Enter on `Y/n` prompts accepts the action.
 - No Python dependencies outside the standard library.
 - Non-interactive checks for packaging: `--version` and `--list-managers`.
 
@@ -49,10 +51,14 @@ pacmangr
 Keys:
 
 - `/`: search packages, or filter installed packages in the installed view
+- `Space`: mark or unmark the focused package
+- `a`: mark all packages currently shown
+- `m`: marked package queue
+- `c`: clear marked package queue
 - `i`: installed packages
 - `s`: search view
-- `Enter`: install selected search result, or show info in installed view
-- `x`: remove selected installed package
+- `Enter`: install focused package or the marked queue; show info in installed view
+- `x`: remove focused installed package or the marked queue
 - `u`: run update commands for detected managers
 - `v`: show package info in the log
 - `r`: refresh current section

@@ -29,7 +29,7 @@ from typing import Callable
 
 
 APP_NAME = "pacmangr"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SPINNER = "|/-\\"
 SIGNAL_FRAMES = ("--", "\\\\", "||", "//")
 MAX_RESULTS = 500
@@ -427,6 +427,12 @@ class PackageItem:
         if tools.pacman:
             return [tools.pacman, "-Si", self.package_id]
         return None
+
+
+def package_key(item: PackageItem) -> tuple[str, str, str]:
+    source = "aur" if item.source == "aur/local" else item.source
+    manager = "arch" if source in {"pacman", "aur"} else item.manager
+    return (source, manager, item.package_id)
 
 
 def strip_ansi(text: str) -> str:
@@ -1032,6 +1038,7 @@ class PkgUI:
         self.installed_filter = ""
         self.search_results: list[PackageItem] = []
         self.installed_items: list[PackageItem] = []
+        self.marked: dict[tuple[str, str, str], PackageItem] = {}
         self.installed_names: set[str] = set()
         self.installed_apt_names: set[str] = set()
         self.installed_flatpak_ids: set[str] = set()
@@ -1102,12 +1109,14 @@ class PkgUI:
                     continue
                 if label == "searching":
                     self.search_results = result  # type: ignore[assignment]
+                    self.refresh_marked_metadata(self.search_results)
                     self.selected = 0
                     self.scroll = 0
                     self.status = f"Found {len(self.search_results)} packages for {self.query!r}."
                     self.log(self.status)
                 elif label == "loading installed packages":
                     self.installed_items = result  # type: ignore[assignment]
+                    self.refresh_marked_metadata(self.installed_items)
                     self.installed_names = {
                         item.package_id
                         for item in self.installed_items
@@ -1315,6 +1324,8 @@ class PkgUI:
                 or needle in item.repo.lower()
                 or needle in item.description.lower()
             ]
+        if self.mode == "marked":
+            return list(self.marked.values())
         return []
 
     def selected_item(self) -> PackageItem | None:
@@ -1323,6 +1334,131 @@ class PkgUI:
             return None
         self.selected = max(0, min(self.selected, len(items) - 1))
         return items[self.selected]
+
+    def refresh_marked_metadata(self, items: list[PackageItem]) -> None:
+        for item in items:
+            key = package_key(item)
+            if key in self.marked:
+                self.marked[key] = item
+
+    def marked_items(self) -> list[PackageItem]:
+        return list(self.marked.values())
+
+    def is_marked(self, item: PackageItem) -> bool:
+        return package_key(item) in self.marked
+
+    def operation_targets(self) -> list[PackageItem]:
+        marked = self.marked_items()
+        if marked:
+            return marked
+        item = self.selected_item()
+        return [item] if item else []
+
+    def toggle_mark_selected(self) -> None:
+        item = self.selected_item()
+        if not item:
+            self.status = "No package selected to mark."
+            return
+        key = package_key(item)
+        if key in self.marked:
+            del self.marked[key]
+            self.status = f"Unmarked {item.title()}."
+        else:
+            self.marked[key] = item
+            self.status = f"Marked {item.title()}. {len(self.marked)} queued."
+
+    def mark_current_items(self) -> None:
+        items = self.current_items()
+        if not items:
+            self.status = "No packages shown to mark."
+            return
+        added = 0
+        for item in items:
+            key = package_key(item)
+            if key not in self.marked:
+                self.marked[key] = item
+                added += 1
+        self.status = f"Marked {added} shown packages. {len(self.marked)} queued."
+
+    def clear_marked(self) -> None:
+        count = len(self.marked)
+        self.marked.clear()
+        self.status = f"Cleared {count} marked packages."
+
+    def package_summary(self, items: list[PackageItem]) -> str:
+        if not items:
+            return "no packages"
+        if len(items) == 1:
+            return items[0].title()
+        names = ", ".join(item.title() for item in items[:4])
+        if len(items) > 4:
+            names += f", +{len(items) - 4} more"
+        return f"{len(items)} packages: {names}"
+
+    def package_command_pairs(
+        self,
+        items: list[PackageItem],
+        action: str,
+    ) -> tuple[list[tuple[PackageItem, list[str]]], list[PackageItem]]:
+        pairs: list[tuple[PackageItem, list[str]]] = []
+        skipped: list[PackageItem] = []
+        for item in items:
+            if action == "install":
+                if item.source == "appimage":
+                    skipped.append(item)
+                    continue
+                cmd = item.install_command(self.tools)
+            else:
+                if not item.installed and item.source != "appimage":
+                    skipped.append(item)
+                    continue
+                cmd = item.remove_command(self.tools)
+            if cmd:
+                pairs.append((item, cmd))
+            else:
+                skipped.append(item)
+        return pairs, skipped
+
+    def can_batch_package_command(self, item: PackageItem) -> bool:
+        return item.source in {
+            "pacman",
+            "aur",
+            "aur/local",
+            "flatpak",
+            "apt",
+            "appimage",
+            "dnf",
+            "zypper",
+            "apk",
+            "xbps",
+            "eopkg",
+            "brew",
+            "nix",
+            "npm",
+            "pip",
+            "opkg",
+            "pkg",
+            "guix",
+        }
+
+    def collapse_package_commands(
+        self,
+        pairs: list[tuple[PackageItem, list[str]]],
+    ) -> list[tuple[list[PackageItem], list[str]]]:
+        grouped: dict[tuple[str, ...], tuple[list[PackageItem], list[str]]] = {}
+        for item, cmd in pairs:
+            if not cmd:
+                continue
+            if not self.can_batch_package_command(item):
+                grouped[("__single__", *cmd, *package_key(item))] = ([item], list(cmd))
+                continue
+            prefix = tuple(cmd[:-1])
+            package_arg = cmd[-1]
+            if prefix not in grouped:
+                grouped[prefix] = ([], list(prefix))
+            grouped[prefix][0].append(item)
+            grouped[prefix][1].append(package_arg)
+        return list(grouped.values())
 
     def prompt(self, label: str) -> str:
         h, w = self.stdscr.getmaxyx()
@@ -1343,80 +1479,131 @@ class PkgUI:
         return raw.decode(errors="replace").strip()
 
     def confirm(self, question: str) -> bool:
-        self.status = f"{question} [y/N]"
+        self.status = f"{question} [Y/n]"
         self.draw()
         self.stdscr.timeout(-1)
         try:
             ch = self.stdscr.getch()
         finally:
             self.stdscr.timeout(120)
-        return ch in (ord("y"), ord("Y"))
+        if ch in (ord("n"), ord("N"), ord("q"), ord("Q"), 27):
+            return False
+        return ch in (ord("y"), ord("Y"), ord("\n"), curses.KEY_ENTER, 10, 13)
+
+    def terminal_confirm(self, question: str) -> bool:
+        try:
+            answer = input(f"{question} [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return True
+        return answer not in {"n", "no", "q", "quit"}
+
+    def wait_for_return(self) -> None:
+        try:
+            input(f"Press Enter to return to {APP_NAME}...")
+        except (EOFError, KeyboardInterrupt):
+            print()
 
     def run_interactive(self, title: str, cmd: list[str]) -> int:
-        command_text = shlex.join(cmd)
-        self.log(f"Running: {command_text}")
-        self.status = f"Running: {command_text}"
+        codes = self.run_interactive_commands(title, [(title, cmd)])
+        return codes[-1] if codes else 1
+
+    def run_interactive_commands(self, title: str, commands: list[tuple[str, list[str]]]) -> list[int]:
+        if not commands:
+            return []
+        command_count = len(commands)
+        self.log(f"Running {command_count} command(s): {title}")
+        self.status = f"Running {command_count} command(s); password prompts and downloads are below."
         self.draw()
         curses.def_prog_mode()
         curses.endwin()
-        code = 1
+        codes: list[int] = []
         try:
             print()
             print(f"{APP_NAME}: {title}")
-            print(f"$ {command_text}")
+            print(f"{command_count} command(s) queued. Password prompts and download progress stay native.")
             print()
-            code = subprocess.call(cmd)
-            print()
-            print(f"{APP_NAME}: command exited with status {code}")
-            input(f"Press Enter to return to {APP_NAME}...")
-        except KeyboardInterrupt:
-            print()
-            print(f"{APP_NAME}: interrupted")
-            input(f"Press Enter to return to {APP_NAME}...")
-            code = 130
+            for index, (label, cmd) in enumerate(commands, start=1):
+                command_text = shlex.join(cmd)
+                print(f"[{index}/{command_count}] {label}")
+                print(f"$ {command_text}")
+                print()
+                try:
+                    code = subprocess.call(cmd)
+                except FileNotFoundError as exc:
+                    print(f"{APP_NAME}: command not found: {exc}")
+                    code = 127
+                except KeyboardInterrupt:
+                    print()
+                    print(f"{APP_NAME}: interrupted")
+                    code = 130
+                codes.append(code)
+                self.log(f"Command exited {code}: {command_text}")
+                print()
+                print(f"{APP_NAME}: command exited with status {code}")
+                print()
+                if code != 0 and index < command_count:
+                    if not self.terminal_confirm("Continue with remaining commands?"):
+                        break
+            failures = sum(1 for code in codes if code != 0)
+            print(f"{APP_NAME}: finished {len(codes)}/{command_count} command(s), {failures} failed.")
+            self.wait_for_return()
         finally:
             curses.reset_prog_mode()
             self.stdscr.keypad(True)
             self.stdscr.timeout(120)
             curses.curs_set(0)
-        self.log(f"Command exited {code}: {command_text}")
-        self.status = f"Command exited {code}."
+        failures = sum(1 for code in codes if code != 0)
+        self.status = f"Finished {len(codes)}/{command_count} command(s), {failures} failed."
         self.refresh_installed(background=True)
-        return code
+        return codes
 
     def install_selected(self) -> None:
-        item = self.selected_item()
-        if not item:
+        targets = self.operation_targets()
+        if not targets:
             self.status = "No package selected."
             return
-        if item.source == "appimage":
+        if len(targets) == 1 and targets[0].source == "appimage":
             self.show_info()
             return
-        if item.installed and not self.confirm(f"{item.title()} is already installed. Reinstall anyway?"):
+        already_installed = [item for item in targets if item.installed and item.source != "appimage"]
+        if already_installed and not self.confirm(
+            f"{self.package_summary(already_installed)} already installed. Reinstall anyway?"
+        ):
             self.status = "Install cancelled."
             return
-        cmd = item.install_command(self.tools)
-        if not cmd:
+        pairs, skipped = self.package_command_pairs(targets, "install")
+        if skipped:
+            self.log("Skipped install targets: " + self.package_summary(skipped))
+        if not pairs:
             self.status = "No usable install command for this package."
             return
-        if not self.confirm(f"Install {item.title()} using {item.manager}?"):
+        items = [item for item, _ in pairs]
+        if not self.confirm(f"Install {self.package_summary(items)}?"):
             self.status = "Install cancelled."
             return
-        self.run_interactive(f"installing {item.title()} - download progress and password prompts are shown below", cmd)
+        grouped = self.collapse_package_commands(pairs)
+        commands = [(self.package_summary(group_items), cmd) for group_items, cmd in grouped]
+        self.run_interactive_commands("installing selected packages", commands)
 
     def remove_selected(self) -> None:
-        item = self.selected_item()
-        if not item:
+        targets = self.operation_targets()
+        if not targets:
             self.status = "No installed package selected."
             return
-        cmd = item.remove_command(self.tools)
-        if not cmd:
+        pairs, skipped = self.package_command_pairs(targets, "remove")
+        if skipped:
+            self.log("Skipped remove targets: " + self.package_summary(skipped))
+        if not pairs:
             self.status = "No usable remove command for this package."
             return
-        if not self.confirm(f"Remove {item.title()}?"):
+        items = [item for item, _ in pairs]
+        if not self.confirm(f"Remove {self.package_summary(items)}?"):
             self.status = "Remove cancelled."
             return
-        self.run_interactive(f"removing {item.title()}", cmd)
+        grouped = self.collapse_package_commands(pairs)
+        commands = [(self.package_summary(group_items), cmd) for group_items, cmd in grouped]
+        self.run_interactive_commands("removing selected packages", commands)
 
     def update_system(self) -> None:
         commands: list[list[str]] = []
@@ -1444,8 +1631,7 @@ class PkgUI:
         if not self.confirm("Run full package update?"):
             self.status = "Update cancelled."
             return
-        for cmd in commands:
-            self.run_interactive("updating packages", cmd)
+        self.run_interactive_commands("updating packages", [(shlex.join(cmd), cmd) for cmd in commands])
 
     def show_info(self) -> None:
         item = self.selected_item()
@@ -1548,6 +1734,12 @@ class PkgUI:
             self.scroll = 0
             self.status = "Search view. Press / to search."
             return
+        if ch == ord("m"):
+            self.mode = "marked"
+            self.selected = 0
+            self.scroll = 0
+            self.status = f"Marked packages view: {len(self.marked)} queued."
+            return
         if ch == ord("i"):
             self.mode = "installed"
             self.selected = 0
@@ -1577,14 +1769,23 @@ class PkgUI:
         if ch == ord("v"):
             self.show_info()
             return
+        if ch == ord(" "):
+            self.toggle_mark_selected()
+            return
+        if ch == ord("a"):
+            self.mark_current_items()
+            return
+        if ch == ord("c"):
+            self.clear_marked()
+            return
         if ch in (ord("\n"), curses.KEY_ENTER, 10, 13):
-            if self.mode == "search":
+            if self.mode in ("search", "marked"):
                 self.install_selected()
             elif self.mode == "installed":
                 self.show_info()
             return
         if ch == ord("x"):
-            if self.mode == "installed":
+            if self.mode in ("installed", "marked") or self.marked:
                 self.remove_selected()
             else:
                 self.status = "Switch to installed view with i before removing packages."
@@ -1599,8 +1800,12 @@ class PkgUI:
             "/ search or filter installed packages",
             "i installed packages section",
             "s search results section",
-            "Enter install selected search result or show installed package info",
-            "x remove selected installed package",
+            "m marked package queue",
+            "Space mark or unmark focused package",
+            "a mark all packages currently shown",
+            "c clear marked package queue",
+            "Enter install focused package or marked queue",
+            "x remove focused installed package or marked queue",
             "u update package ecosystems available on this host",
             "v show package info in log view",
             "r refresh current section",
@@ -1747,6 +1952,7 @@ class PkgUI:
         tabs = [
             ("s", "Search", self.mode == "search"),
             ("i", "Installed", self.mode == "installed"),
+            ("m", "Marked", self.mode == "marked"),
             ("l", "Log", self.mode == "log"),
         ]
         x = 2
@@ -1771,6 +1977,8 @@ class PkgUI:
 
         if self.mode == "search":
             title = f" SEARCH GRID :: {len(items)} RESULTS "
+        elif self.mode == "marked":
+            title = f" MARKED QUEUE :: {len(items)} SELECTED "
         else:
             title = f" INSTALLED VAULT :: {len(items)} SHOWN "
         self.draw_box(top, 0, height, list_w, title, active=True)
@@ -1778,9 +1986,16 @@ class PkgUI:
 
         row_start = top + 2
         source_line = self.source_summary(items)
+        if self.marked:
+            source_line = f"{source_line}  |  marked:{len(self.marked)}"
         self.safe_addstr(top + 1, 1, clip(source_line, inner_w), curses.A_DIM)
         if not items:
-            empty = "Press / to search." if self.mode == "search" else "No installed packages loaded."
+            if self.mode == "search":
+                empty = "Press / to search."
+            elif self.mode == "marked":
+                empty = "No marked packages. Use Space or a from search/installed."
+            else:
+                empty = "No installed packages loaded."
             if self.busy:
                 empty = f"{self.busy_label}..."
             self.safe_addstr(row_start, 2, clip(empty, max(1, inner_w - 2)), curses.A_DIM)
@@ -1790,13 +2005,16 @@ class PkgUI:
             selected = index == self.selected
             attr = curses.color_pair(2) if selected else curses.A_NORMAL
             source_attr = attr if selected else self.source_attr(item.source)
+            mark_attr = attr if selected else curses.color_pair(3) | curses.A_BOLD
+            mark = "*" if self.is_marked(item) else " "
 
             installed = " [installed]" if item.installed and self.mode == "search" else ""
             source = clip(self.source_tag(item.source), 7)
-            prefix = f"{index + 1:>4} [{source:<7}] "
+            prefix = f"{mark}{index + 1:>3} [{source:<7}] "
             text = f"{item.name} {item.version}{installed}"
             self.safe_addstr(y, 1, " " * inner_w, attr)
-            self.safe_addstr(y, 1, clip(prefix, inner_w), source_attr)
+            self.safe_addstr(y, 1, mark, mark_attr)
+            self.safe_addstr(y, 2, clip(prefix[1:], max(0, inner_w - 1)), source_attr)
             self.safe_addstr(y, 1 + len(prefix), clip(text, max(0, inner_w - len(prefix))), attr)
 
         if wide:
@@ -1818,6 +2036,7 @@ class PkgUI:
             f"source: {item.source}",
             f"manager: {item.manager}",
             f"version: {item.version or 'unknown'}",
+            f"marked: {'yes' if self.is_marked(item) else 'no'}",
         ]
         if item.repo:
             lines.append(f"repo/remote: {item.repo}")
@@ -1828,13 +2047,14 @@ class PkgUI:
             lines.extend(textwrap.wrap(item.description, width=max(10, width - 2)))
         lines.append("")
         lines.append("Actions:")
+        lines.append("Space mark/unmark")
         if item.source == "appimage":
             lines.append("Enter/v file info")
             lines.append("x remove file in installed view")
         else:
-            lines.append("Enter install/info")
+            lines.append("Enter install or info")
             lines.append("v package info")
-            lines.append("x remove in installed view")
+            lines.append("x remove installed/marked")
 
         for offset, line in enumerate(lines[:inner_h]):
             attr = curses.A_BOLD if offset == 0 else curses.A_NORMAL
@@ -1861,8 +2081,10 @@ class PkgUI:
         status = self.status
         if self.busy:
             status = f"{SPINNER[self.spinner_index % len(SPINNER)]} {status}"
+        if self.marked and "marked:" not in status:
+            status = f"{status}  | marked:{len(self.marked)}"
         self.safe_addstr(y + 1, 1, pad(status, w - 2), curses.color_pair(3))
-        keys = " / search/filter  i installed  s search  Enter install/info  x remove  u update  ? help  q quit "
+        keys = " / search  Space mark  a all  m marked  c clear  Enter install/info  x remove  u update  ? help "
         self.safe_addstr(y + 2, 1, pad(keys, w - 2), curses.A_DIM)
 
     def clear_line(self, y: int) -> None:

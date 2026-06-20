@@ -14,5 +14,9 @@ Install, remove, and update operations are intentionally delegated to the real
 manager command. This preserves native prompts, password handling, progress
 output, conflict handling, and package-manager-specific behavior.
 
+When multiple marked packages share the same command shape, `pacmangr` batches
+them into one native command. Otherwise it queues the native commands and keeps
+the terminal attached so password prompts and progress output remain visible.
+
 For managers whose CLI output is not stable JSON, parsing is conservative and
 best-effort. Failed manager commands are logged in the TUI log view.
