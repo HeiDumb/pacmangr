@@ -87,30 +87,6 @@ Uninstall:
 sudo make uninstall
 ```
 
-## AUR Packaging
-
-This repository includes an AUR-ready `PKGBUILD` and `.SRCINFO` at the root.
-The current package style includes the `pacmangr` script directly as an AUR
-source file, so it can be submitted to AUR immediately without waiting for a
-GitHub release tarball.
-
-To test the package locally:
-
-```sh
-makepkg -f
-sudo pacman -U pacmangr-*.pkg.tar.zst
-```
-
-Before pushing to AUR after editing `pacmangr`, refresh the checksum and
-`.SRCINFO`:
-
-```sh
-sha256sum pacmangr
-makepkg --printsrcinfo > .SRCINFO
-```
-
-See [docs/AUR.md](docs/AUR.md) for the full publishing flow.
-
 ## Development Checks
 
 ```sh
