@@ -1,0 +1,1931 @@
+#!/usr/bin/env python3
+"""
+pacmangr: an animated terminal package manager for mixed Linux systems.
+
+It autodetects package managers already present on the host, including distro
+managers, language package managers, Flatpak, and local AppImages. Search/list
+operations run inside curses when a manager exposes parseable output;
+install/remove/update operations suspend curses and hand control to the real
+command so sudo, confirmation prompts, and download progress work normally.
+"""
+
+from __future__ import annotations
+
+import curses
+import json
+import os
+import queue
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+
+APP_NAME = "pacmangr"
+VERSION = "0.1.0"
+SPINNER = "|/-\\"
+SIGNAL_FRAMES = ("--", "\\\\", "||", "//")
+MAX_RESULTS = 500
+APPIMAGE_SCAN_DEPTH = 4
+
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+PKG_HEADER_RE = re.compile(r"^([^\s/]+)/([^\s]+)\s+([^\s]+)(.*)$")
+CARGO_SEARCH_RE = re.compile(r"^([A-Za-z0-9_.+@/-]+)\s+=\s+\"([^\"]+)\"(?:\s+#\s*(.*))?$")
+PIP_INDEX_RE = re.compile(r"^([A-Za-z0-9_.+-]+)\s+\(([^)]+)\)")
+
+
+MANAGER_SPECS: dict[str, dict[str, object]] = {
+    "dnf": {
+        "commands": ("dnf",),
+        "search": ("dnf", "-q", "search", "{query}"),
+        "installed": ("dnf", "-q", "list", "installed"),
+        "install": ("dnf", "install", "{package}"),
+        "remove": ("dnf", "remove", "{package}"),
+        "update": ("dnf", "upgrade"),
+        "info": ("dnf", "info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "zypper": {
+        "commands": ("zypper",),
+        "search": ("zypper", "search", "{query}"),
+        "installed": ("zypper", "search", "--installed-only"),
+        "install": ("zypper", "install", "{package}"),
+        "remove": ("zypper", "remove", "{package}"),
+        "update": ("zypper", "update"),
+        "info": ("zypper", "info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "apk": {
+        "commands": ("apk",),
+        "search": ("apk", "search", "-v", "{query}"),
+        "installed": ("apk", "info", "-v"),
+        "install": ("apk", "add", "{package}"),
+        "remove": ("apk", "del", "{package}"),
+        "update": ("apk", "upgrade"),
+        "info": ("apk", "info", "-a", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "xbps": {
+        "commands": ("xbps-query", "xbps-install", "xbps-remove"),
+        "search": ("xbps-query", "-Rs", "{query}"),
+        "installed": ("xbps-query", "-l"),
+        "install": ("xbps-install", "-S", "{package}"),
+        "remove": ("xbps-remove", "-R", "{package}"),
+        "update": ("xbps-install", "-Syu"),
+        "info": ("xbps-query", "-RS", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "emerge": {
+        "commands": ("emerge",),
+        "search": ("emerge", "--searchdesc", "{query}"),
+        "install": ("emerge", "{package}"),
+        "remove": ("emerge", "--deselect", "{package}"),
+        "update": ("emerge", "--sync"),
+        "info": ("emerge", "--info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "eopkg": {
+        "commands": ("eopkg",),
+        "search": ("eopkg", "search", "{query}"),
+        "installed": ("eopkg", "list-installed"),
+        "install": ("eopkg", "install", "{package}"),
+        "remove": ("eopkg", "remove", "{package}"),
+        "update": ("eopkg", "upgrade"),
+        "info": ("eopkg", "info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "swupd": {
+        "commands": ("swupd",),
+        "search": ("swupd", "search", "{query}"),
+        "installed": ("swupd", "bundle-list"),
+        "install": ("swupd", "bundle-add", "{package}"),
+        "remove": ("swupd", "bundle-remove", "{package}"),
+        "update": ("swupd", "update"),
+        "info": ("swupd", "bundle-info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "brew": {
+        "commands": ("brew",),
+        "search": ("brew", "search", "{query}"),
+        "installed": ("brew", "list", "--versions"),
+        "install": ("brew", "install", "{package}"),
+        "remove": ("brew", "uninstall", "{package}"),
+        "update": ("brew", "upgrade"),
+        "info": ("brew", "info", "{package}"),
+        "parser": "generic",
+    },
+    "nix": {
+        "commands": ("nix-env",),
+        "search": ("nix-env", "-qaP", "{query}"),
+        "installed": ("nix-env", "-q"),
+        "install": ("nix-env", "-iA", "{package}"),
+        "remove": ("nix-env", "-e", "{package}"),
+        "update": ("nix-env", "-u"),
+        "parser": "generic",
+    },
+    "cargo": {
+        "commands": ("cargo",),
+        "search": ("cargo", "search", "{query}", "--limit", "50"),
+        "installed": ("cargo", "install", "--list"),
+        "install": ("cargo", "install", "{package}"),
+        "remove": ("cargo", "uninstall", "{package}"),
+        "parser": "cargo",
+    },
+    "npm": {
+        "commands": ("npm",),
+        "search": ("npm", "search", "--json", "{query}"),
+        "installed": ("npm", "list", "-g", "--depth=0", "--json"),
+        "install": ("npm", "install", "-g", "{package}"),
+        "remove": ("npm", "uninstall", "-g", "{package}"),
+        "update": ("npm", "update", "-g"),
+        "info": ("npm", "view", "{package}"),
+        "parser": "npm",
+    },
+    "pip": {
+        "commands": ("pip",),
+        "search": ("pip", "index", "versions", "{query}"),
+        "installed": ("pip", "list", "--format=json"),
+        "install": ("pip", "install", "--user", "{package}"),
+        "remove": ("pip", "uninstall", "{package}"),
+        "info": ("pip", "show", "{package}"),
+        "parser": "pip",
+    },
+    "pipx": {
+        "commands": ("pipx",),
+        "installed": ("pipx", "list", "--json"),
+        "install": ("pipx", "install", "{package}"),
+        "remove": ("pipx", "uninstall", "{package}"),
+        "update": ("pipx", "upgrade-all"),
+        "parser": "pipx",
+    },
+    "gem": {
+        "commands": ("gem",),
+        "search": ("gem", "search", "-r", "{query}"),
+        "installed": ("gem", "list", "--local"),
+        "install": ("gem", "install", "{package}"),
+        "remove": ("gem", "uninstall", "{package}"),
+        "update": ("gem", "update"),
+        "info": ("gem", "info", "{package}"),
+        "parser": "generic",
+    },
+    "luarocks": {
+        "commands": ("luarocks",),
+        "search": ("luarocks", "search", "{query}"),
+        "installed": ("luarocks", "list"),
+        "install": ("luarocks", "install", "{package}"),
+        "remove": ("luarocks", "remove", "{package}"),
+        "parser": "generic",
+    },
+    "opkg": {
+        "commands": ("opkg",),
+        "search": ("opkg", "find", "*{query}*"),
+        "installed": ("opkg", "list-installed"),
+        "install": ("opkg", "install", "{package}"),
+        "remove": ("opkg", "remove", "{package}"),
+        "update": ("opkg", "update"),
+        "info": ("opkg", "info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "pkg": {
+        "commands": ("pkg",),
+        "search": ("pkg", "search", "{query}"),
+        "installed": ("pkg", "info"),
+        "install": ("pkg", "install", "{package}"),
+        "remove": ("pkg", "delete", "{package}"),
+        "update": ("pkg", "upgrade"),
+        "info": ("pkg", "info", "{package}"),
+        "privileged": True,
+        "parser": "generic",
+    },
+    "guix": {
+        "commands": ("guix",),
+        "search": ("guix", "search", "{query}"),
+        "installed": ("guix", "package", "--list-installed"),
+        "install": ("guix", "install", "{package}"),
+        "remove": ("guix", "remove", "{package}"),
+        "update": ("guix", "upgrade"),
+        "parser": "generic",
+    },
+}
+
+
+CORE_MANAGER_NAMES = {"pacman", "yay", "paru", "flatpak", "apt", "snap"}
+
+
+def detect_extra_managers() -> dict[str, str]:
+    managers: dict[str, str] = {}
+    for name, spec in MANAGER_SPECS.items():
+        if name in CORE_MANAGER_NAMES:
+            continue
+        commands = tuple(spec.get("commands", ()))
+        paths = [shutil.which(str(command)) for command in commands]
+        if commands and all(paths):
+            managers[name] = str(paths[0])
+    return managers
+
+
+def manager_spec_command(
+    manager: str,
+    action: str,
+    tools: "Tools",
+    package: str = "",
+    query: str = "",
+) -> list[str] | None:
+    spec = MANAGER_SPECS.get(manager)
+    if not spec or action not in spec:
+        return None
+    template = spec[action]
+    if not isinstance(template, tuple):
+        return None
+    cmd = [str(part).format(package=package, query=query) for part in template]
+    if not cmd:
+        return None
+    resolved = shutil.which(cmd[0])
+    if not resolved:
+        return None
+    cmd[0] = resolved
+    if action in {"install", "remove", "update"} and spec.get("privileged"):
+        if not tools.privilege:
+            return None
+        cmd = [tools.privilege] + cmd
+    return cmd
+
+
+@dataclass
+class Tools:
+    pacman: str | None
+    yay: str | None
+    paru: str | None
+    flatpak: str | None
+    pacseek: str | None
+    apt: str | None
+    apt_cache: str | None
+    dpkg_query: str | None
+    snap: str | None
+    sudo: str | None
+    doas: str | None
+    extra_managers: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def detect(cls) -> "Tools":
+        return cls(
+            pacman=shutil.which("pacman"),
+            yay=shutil.which("yay"),
+            paru=shutil.which("paru"),
+            flatpak=shutil.which("flatpak"),
+            pacseek=shutil.which("pacseek"),
+            apt=shutil.which("apt"),
+            apt_cache=shutil.which("apt-cache"),
+            dpkg_query=shutil.which("dpkg-query"),
+            snap=shutil.which("snap"),
+            sudo=shutil.which("sudo"),
+            doas=shutil.which("doas"),
+            extra_managers=detect_extra_managers(),
+        )
+
+    @property
+    def privilege(self) -> str | None:
+        return self.sudo or self.doas
+
+    @property
+    def aur_helper(self) -> tuple[str, str] | None:
+        if self.yay:
+            return ("yay", self.yay)
+        if self.paru:
+            return ("paru", self.paru)
+        return None
+
+    def enabled_labels(self) -> str:
+        labels = []
+        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "pacseek"):
+            if getattr(self, label):
+                labels.append("dpkg" if label == "dpkg_query" else label)
+        labels.extend(name for name in self.extra_managers if name not in labels)
+        return ", ".join(labels) if labels else "none"
+
+
+@dataclass
+class PackageItem:
+    source: str
+    manager: str
+    name: str
+    package_id: str
+    version: str = ""
+    description: str = ""
+    repo: str = ""
+    installed: bool = False
+    origin: str = ""
+
+    def title(self) -> str:
+        if self.source == "flatpak" and self.name != self.package_id:
+            return f"{self.name} ({self.package_id})"
+        if self.source == "appimage":
+            return f"{self.name} ({self.package_id})"
+        return self.name
+
+    def install_command(self, tools: Tools) -> list[str] | None:
+        if self.source == "flatpak":
+            if not tools.flatpak:
+                return None
+            remote = self.origin.split(",")[0].strip() or "flathub"
+            return [tools.flatpak, "install", remote, self.package_id]
+        if self.source == "apt":
+            if tools.apt and tools.privilege:
+                return [tools.privilege, tools.apt, "install", self.package_id]
+            return None
+        if self.source == "snap":
+            if tools.snap and tools.privilege:
+                return [tools.privilege, tools.snap, "install", self.package_id]
+            return None
+        if self.source == "appimage":
+            return None
+        generic = manager_spec_command(self.source, "install", tools, package=self.package_id)
+        if generic:
+            return generic
+
+        if self.manager == "yay" and tools.yay:
+            return [tools.yay, "-S", self.package_id]
+        if self.manager == "paru" and tools.paru:
+            return [tools.paru, "-S", self.package_id]
+        if tools.pacman and tools.privilege:
+            return [tools.privilege, tools.pacman, "-S", self.package_id]
+        return None
+
+    def remove_command(self, tools: Tools) -> list[str] | None:
+        if self.source == "flatpak":
+            if tools.flatpak:
+                return [tools.flatpak, "uninstall", self.package_id]
+            return None
+        if self.source == "apt":
+            if tools.apt and tools.privilege:
+                return [tools.privilege, tools.apt, "remove", self.package_id]
+            return None
+        if self.source == "snap":
+            if tools.snap and tools.privilege:
+                return [tools.privilege, tools.snap, "remove", self.package_id]
+            return None
+        if self.source == "appimage":
+            rm = shutil.which("rm") or "/usr/bin/rm"
+            return [rm, "-v", self.package_id]
+        generic = manager_spec_command(self.source, "remove", tools, package=self.package_id)
+        if generic:
+            return generic
+        if tools.pacman and tools.privilege:
+            return [tools.privilege, tools.pacman, "-Rns", self.package_id]
+        return None
+
+    def info_command(self, tools: Tools, installed_view: bool) -> list[str] | None:
+        if self.source == "flatpak":
+            if not tools.flatpak:
+                return None
+            if installed_view or self.installed:
+                return [tools.flatpak, "info", self.package_id]
+            remote = self.origin.split(",")[0].strip() or "flathub"
+            return [tools.flatpak, "remote-info", remote, self.package_id]
+        if self.source == "apt":
+            if installed_view or self.installed:
+                if tools.dpkg_query:
+                    return [tools.dpkg_query, "-s", self.package_id]
+            if tools.apt:
+                return [tools.apt, "show", self.package_id]
+            return None
+        if self.source == "snap":
+            if tools.snap:
+                return [tools.snap, "info", self.package_id]
+            return None
+        if self.source == "appimage":
+            return None
+        generic = manager_spec_command(self.source, "info", tools, package=self.package_id)
+        if generic:
+            return generic
+
+        if installed_view or self.installed:
+            if tools.pacman:
+                return [tools.pacman, "-Qi", self.package_id]
+            return None
+
+        if self.manager == "yay" and tools.yay:
+            return [tools.yay, "-Si", self.package_id]
+        if self.manager == "paru" and tools.paru:
+            return [tools.paru, "-Si", self.package_id]
+        if tools.pacman:
+            return [tools.pacman, "-Si", self.package_id]
+        return None
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
+
+
+def run_capture(cmd: list[str], timeout: int = 40) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except FileNotFoundError as exc:
+        return (127, str(exc))
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        return (124, f"Timed out after {timeout}s\n{output}")
+    return (proc.returncode, strip_ansi(proc.stdout))
+
+
+def parse_arch_search(
+    output: str,
+    manager: str,
+    installed_names: set[str],
+    source_override: str | None = None,
+) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    current: PackageItem | None = None
+
+    for raw_line in output.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+
+        match = PKG_HEADER_RE.match(line)
+        if match:
+            repo, name, version, rest = match.groups()
+            source = source_override or ("aur" if repo == "aur" else "pacman")
+            installed = name in installed_names or "installed" in rest.lower()
+            current = PackageItem(
+                source=source,
+                manager=manager,
+                repo=repo,
+                name=name,
+                package_id=name,
+                version=version,
+                installed=installed,
+            )
+            items.append(current)
+            continue
+
+        if current and line.startswith(" "):
+            desc = line.strip()
+            if desc:
+                current.description = desc
+
+    return items
+
+
+def parse_pacman_installed(output: str, foreign_names: set[str]) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for line in output.splitlines():
+        parts = line.split(maxsplit=1)
+        if not parts:
+            continue
+        name = parts[0]
+        version = parts[1] if len(parts) > 1 else ""
+        source = "aur/local" if name in foreign_names else "pacman"
+        items.append(
+            PackageItem(
+                source=source,
+                manager="pacman",
+                name=name,
+                package_id=name,
+                version=version,
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_flatpak_search(output: str, installed_ids: set[str]) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+    items: list[PackageItem] = []
+    for entry in data:
+        package_id = entry.get("application_id") or entry.get("ref") or ""
+        if not package_id:
+            continue
+        items.append(
+            PackageItem(
+                source="flatpak",
+                manager="flatpak",
+                repo="flatpak",
+                name=entry.get("name") or package_id,
+                package_id=package_id,
+                version=entry.get("version") or "",
+                description=entry.get("description") or "",
+                installed=package_id in installed_ids,
+                origin=entry.get("remotes") or "flathub",
+            )
+        )
+    return items
+
+
+def parse_flatpak_installed(output: str) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+    items: list[PackageItem] = []
+    for entry in data:
+        package_id = entry.get("application_id") or entry.get("ref") or ""
+        if not package_id:
+            continue
+        items.append(
+            PackageItem(
+                source="flatpak",
+                manager="flatpak",
+                repo=entry.get("origin") or "flatpak",
+                name=entry.get("name") or package_id,
+                package_id=package_id,
+                version=entry.get("version") or "",
+                installed=True,
+                origin=entry.get("origin") or "flathub",
+                description=f"installation: {entry.get('installation') or 'unknown'}",
+            )
+        )
+    return items
+
+
+def parse_apt_search(output: str, installed_names: set[str]) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for line in output.splitlines():
+        if " - " not in line:
+            continue
+        name, description = line.split(" - ", 1)
+        name = name.strip()
+        if not name or " " in name:
+            continue
+        items.append(
+            PackageItem(
+                source="apt",
+                manager="apt",
+                repo="apt",
+                name=name,
+                package_id=name,
+                description=description.strip(),
+                installed=name in installed_names,
+            )
+        )
+    return items
+
+
+def parse_apt_installed(output: str) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for line in output.splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) < 3:
+            continue
+        name, version, status = parts[:3]
+        if not status.startswith("ii"):
+            continue
+        description = parts[3].strip() if len(parts) > 3 else ""
+        items.append(
+            PackageItem(
+                source="apt",
+                manager="apt",
+                repo="dpkg",
+                name=name,
+                package_id=name,
+                version=version,
+                description=description,
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_snap_search(output: str, installed_names: set[str]) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for index, line in enumerate(output.splitlines()):
+        if index == 0 and line.lower().startswith("name"):
+            continue
+        parts = line.split(None, 4)
+        if len(parts) < 2:
+            continue
+        name = parts[0]
+        version = parts[1]
+        description = parts[4] if len(parts) > 4 else ""
+        items.append(
+            PackageItem(
+                source="snap",
+                manager="snap",
+                repo="snap",
+                name=name,
+                package_id=name,
+                version=version,
+                description=description,
+                installed=name in installed_names,
+            )
+        )
+    return items
+
+
+def parse_snap_installed(output: str) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for index, line in enumerate(output.splitlines()):
+        if index == 0 and line.lower().startswith("name"):
+            continue
+        parts = line.split(None, 5)
+        if len(parts) < 2:
+            continue
+        name = parts[0]
+        version = parts[1]
+        publisher = parts[4] if len(parts) > 4 else ""
+        notes = parts[5] if len(parts) > 5 else ""
+        description = " ".join(part for part in (publisher, notes) if part)
+        items.append(
+            PackageItem(
+                source="snap",
+                manager="snap",
+                repo="snap",
+                name=name,
+                package_id=name,
+                version=version,
+                description=description,
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_cargo_search(output: str, installed_names: set[str]) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for line in output.splitlines():
+        match = CARGO_SEARCH_RE.match(line.strip())
+        if not match:
+            continue
+        name, version, description = match.groups()
+        items.append(
+            PackageItem(
+                source="cargo",
+                manager="cargo",
+                repo="crates.io",
+                name=name,
+                package_id=name,
+                version=version,
+                description=description or "",
+                installed=name in installed_names,
+            )
+        )
+    return items
+
+
+def parse_cargo_installed(output: str) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for line in output.splitlines():
+        if not line or line.startswith(" "):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        name = parts[0]
+        version = parts[1].rstrip(":") if len(parts) > 1 else ""
+        items.append(
+            PackageItem(
+                source="cargo",
+                manager="cargo",
+                repo="cargo install",
+                name=name,
+                package_id=name,
+                version=version,
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_npm_search(output: str, installed_names: set[str]) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    items: list[PackageItem] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("sanitized_name") or ""
+        if not name:
+            continue
+        items.append(
+            PackageItem(
+                source="npm",
+                manager="npm",
+                repo="npm registry",
+                name=name,
+                package_id=name,
+                version=entry.get("version") or "",
+                description=entry.get("description") or "",
+                installed=name in installed_names,
+            )
+        )
+    return items
+
+
+def parse_npm_installed(output: str) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    dependencies = data.get("dependencies", {}) if isinstance(data, dict) else {}
+    items: list[PackageItem] = []
+    for name, meta in dependencies.items():
+        if not isinstance(meta, dict):
+            meta = {}
+        items.append(
+            PackageItem(
+                source="npm",
+                manager="npm",
+                repo="global npm",
+                name=name,
+                package_id=name,
+                version=meta.get("version") or "",
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_pip_search(output: str, installed_names: set[str]) -> list[PackageItem]:
+    match = PIP_INDEX_RE.search(output)
+    if not match:
+        return []
+    name, version = match.groups()
+    installed = name.lower() in {item.lower() for item in installed_names}
+    return [
+        PackageItem(
+            source="pip",
+            manager="pip",
+            repo="PyPI",
+            name=name,
+            package_id=name,
+            version=version,
+            installed=installed,
+        )
+    ]
+
+
+def parse_pip_installed(output: str) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    items: list[PackageItem] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        items.append(
+            PackageItem(
+                source="pip",
+                manager="pip",
+                repo="pip",
+                name=name,
+                package_id=name,
+                version=entry.get("version") or "",
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_pipx_installed(output: str) -> list[PackageItem]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+    venvs = data.get("venvs", {}) if isinstance(data, dict) else {}
+    items: list[PackageItem] = []
+    for name, meta in venvs.items():
+        package = meta.get("metadata", {}).get("main_package", {}) if isinstance(meta, dict) else {}
+        items.append(
+            PackageItem(
+                source="pipx",
+                manager="pipx",
+                repo="pipx",
+                name=name,
+                package_id=name,
+                version=package.get("package_version") or "",
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_generic_search(manager: str, output: str, installed_names: set[str]) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("Loaded ", "Available ", "Last metadata", "Name ", "====")):
+            continue
+        name = ""
+        version = ""
+        description = ""
+        if " - " in line:
+            left, description = line.split(" - ", 1)
+            name = left.split()[0]
+        elif " : " in line:
+            left, description = line.split(" : ", 1)
+            name = left.split()[0].split(".")[0]
+        elif "/" in line and manager == "zypper":
+            parts = [part.strip() for part in line.split("|")]
+            if len(parts) >= 3 and parts[1] and parts[1] != "Name":
+                name = parts[1]
+                version = parts[3] if len(parts) > 3 else ""
+        else:
+            parts = line.split()
+            if parts:
+                name = parts[0].lstrip("[-*>=~")
+                if len(parts) > 1 and re.match(r"^[0-9][A-Za-z0-9_.:+~-]*$", parts[1]):
+                    version = parts[1]
+        name = name.strip("|,;:")
+        if not name or name.lower() in {"name", "package", "installed", "available"}:
+            continue
+        items.append(
+            PackageItem(
+                source=manager,
+                manager=manager,
+                repo=manager,
+                name=name,
+                package_id=name,
+                version=version,
+                description=description.strip(),
+                installed=name in installed_names,
+            )
+        )
+    return items[:MAX_RESULTS]
+
+
+def parse_generic_installed(manager: str, output: str) -> list[PackageItem]:
+    items: list[PackageItem] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("Name ", "Installed", "Listing", "====")):
+            continue
+        if "|" in line and manager == "zypper":
+            parts = [part.strip() for part in line.split("|")]
+            if len(parts) >= 3 and parts[1] and parts[1] != "Name":
+                items.append(
+                    PackageItem(
+                        source=manager,
+                        manager=manager,
+                        repo=manager,
+                        name=parts[1],
+                        package_id=parts[1],
+                        version=parts[3] if len(parts) > 3 else "",
+                        installed=True,
+                    )
+                )
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        name = parts[0].lstrip("[-*>=~")
+        version = ""
+        if len(parts) > 1 and re.match(r"^[0-9][A-Za-z0-9_.:+~-]*$", parts[1]):
+            version = parts[1].rstrip(":")
+        if not name or name.lower() in {"name", "package"}:
+            continue
+        items.append(
+            PackageItem(
+                source=manager,
+                manager=manager,
+                repo=manager,
+                name=name,
+                package_id=name,
+                version=version,
+                installed=True,
+            )
+        )
+    return items
+
+
+def parse_manager_search(manager: str, output: str, installed_names: set[str]) -> list[PackageItem]:
+    parser = MANAGER_SPECS.get(manager, {}).get("parser")
+    if parser == "cargo":
+        return parse_cargo_search(output, installed_names)
+    if parser == "npm":
+        return parse_npm_search(output, installed_names)
+    if parser == "pip":
+        return parse_pip_search(output, installed_names)
+    return parse_generic_search(manager, output, installed_names)
+
+
+def parse_manager_installed(manager: str, output: str) -> list[PackageItem]:
+    parser = MANAGER_SPECS.get(manager, {}).get("parser")
+    if parser == "cargo":
+        return parse_cargo_installed(output)
+    if parser == "npm":
+        return parse_npm_installed(output)
+    if parser == "pip":
+        return parse_pip_installed(output)
+    if parser == "pipx":
+        return parse_pipx_installed(output)
+    return parse_generic_installed(manager, output)
+
+
+def appimage_roots() -> list[Path]:
+    home = Path.home()
+    return [
+        home / "Applications",
+        home / "Downloads",
+        home / ".local" / "bin",
+        home / ".local" / "share" / "AppImages",
+        home / ".local" / "share" / "appimagekit",
+        home / ".local" / "share" / "applications",
+        Path("/opt"),
+    ]
+
+
+def find_appimages(query: str = "") -> list[PackageItem]:
+    needle = query.lower().strip()
+    seen: set[Path] = set()
+    items: list[PackageItem] = []
+    for root in appimage_roots():
+        if not root.exists():
+            continue
+        root = root.resolve()
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            current = Path(dirpath)
+            try:
+                depth = len(current.relative_to(root).parts)
+            except ValueError:
+                depth = 0
+            if depth >= APPIMAGE_SCAN_DEPTH:
+                dirnames[:] = []
+            for filename in filenames:
+                if not filename.lower().endswith(".appimage"):
+                    continue
+                path = current / filename
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    resolved = path
+                if resolved in seen:
+                    continue
+                haystack = f"{filename} {path}".lower()
+                if needle and needle not in haystack:
+                    continue
+                seen.add(resolved)
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    size = 0
+                items.append(
+                    PackageItem(
+                        source="appimage",
+                        manager="appimage",
+                        repo="local file",
+                        name=path.stem,
+                        package_id=str(path),
+                        version=human_size(size),
+                        description=f"Local AppImage: {path}",
+                        installed=True,
+                    )
+                )
+    return sorted(items, key=lambda item: item.name.lower())
+
+
+def human_size(size: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+
+
+class PkgUI:
+    def __init__(self, stdscr: "curses._CursesWindow") -> None:
+        self.stdscr = stdscr
+        self.tools = Tools.detect()
+        self.mode = "search"
+        self.search_backend = "all"
+        self.query = ""
+        self.installed_filter = ""
+        self.search_results: list[PackageItem] = []
+        self.installed_items: list[PackageItem] = []
+        self.installed_names: set[str] = set()
+        self.installed_apt_names: set[str] = set()
+        self.installed_flatpak_ids: set[str] = set()
+        self.installed_snap_names: set[str] = set()
+        self.installed_extra_names: dict[str, set[str]] = {}
+        self.selected = 0
+        self.scroll = 0
+        self.log_lines: list[str] = []
+        self.status = "Press / to search, i for installed packages."
+        self.busy = False
+        self.busy_label = ""
+        self.spinner_index = 0
+        self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
+        self.last_installed_load = 0.0
+        self.running = True
+
+    def setup(self) -> None:
+        curses.curs_set(0)
+        curses.use_default_colors()
+        curses.start_color()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_GREEN, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(6, curses.COLOR_MAGENTA, -1)
+        self.stdscr.keypad(True)
+        self.stdscr.timeout(120)
+        self.log(f"Detected tools: {self.tools.enabled_labels()}")
+        self.refresh_installed(background=True)
+
+    def log(self, message: str) -> None:
+        stamp = time.strftime("%H:%M:%S")
+        for line in str(message).splitlines() or [""]:
+            self.log_lines.append(f"[{stamp}] {line}")
+        self.log_lines = self.log_lines[-1000:]
+
+    def spawn_job(self, label: str, fn: Callable[[], object]) -> None:
+        if self.busy:
+            self.status = f"Still {self.busy_label}; wait for it to finish."
+            return
+        self.busy = True
+        self.busy_label = label
+        self.status = f"{label}..."
+
+        def worker() -> None:
+            try:
+                result = fn()
+                self.events.put(("done", (label, result, None)))
+            except Exception as exc:  # noqa: BLE001 - surface unexpected tool failures in the log.
+                self.events.put(("done", (label, None, exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def poll_events(self) -> None:
+        while True:
+            try:
+                event, payload = self.events.get_nowait()
+            except queue.Empty:
+                return
+            if event == "done":
+                label, result, error = payload  # type: ignore[misc]
+                self.busy = False
+                self.busy_label = ""
+                if error:
+                    self.status = f"{label} failed: {error}"
+                    self.log(self.status)
+                    continue
+                if label == "searching":
+                    self.search_results = result  # type: ignore[assignment]
+                    self.selected = 0
+                    self.scroll = 0
+                    self.status = f"Found {len(self.search_results)} packages for {self.query!r}."
+                    self.log(self.status)
+                elif label == "loading installed packages":
+                    self.installed_items = result  # type: ignore[assignment]
+                    self.installed_names = {
+                        item.package_id
+                        for item in self.installed_items
+                        if item.source in ("pacman", "aur/local")
+                    }
+                    self.installed_apt_names = {
+                        item.package_id for item in self.installed_items if item.source == "apt"
+                    }
+                    self.installed_flatpak_ids = {
+                        item.package_id for item in self.installed_items if item.source == "flatpak"
+                    }
+                    self.installed_snap_names = {
+                        item.package_id for item in self.installed_items if item.source == "snap"
+                    }
+                    self.installed_extra_names = {
+                        manager: {
+                            item.package_id
+                            for item in self.installed_items
+                            if item.source == manager
+                        }
+                        for manager in self.tools.extra_managers
+                    }
+                    self.last_installed_load = time.time()
+                    self.status = f"Loaded {len(self.installed_items)} installed packages."
+                    self.log(self.status)
+                elif label.startswith("loading info"):
+                    self.mode = "log"
+                    self.selected = len(self.log_lines) - 1
+                    self.scroll = 0
+                    self.status = "Info loaded in log view."
+                else:
+                    self.status = f"{label} finished."
+
+    def search(self) -> None:
+        query = self.prompt("Search packages")
+        if not query:
+            self.status = "Search cancelled."
+            return
+        self.query = query
+        self.mode = "search"
+        self.selected = 0
+        self.scroll = 0
+
+        def job() -> list[PackageItem]:
+            return self.search_packages(query, "all")
+
+        self.spawn_job("searching", job)
+
+    def search_packages(self, query: str, backend: str) -> list[PackageItem]:
+        results: list[PackageItem] = []
+        seen: set[tuple[str, str]] = set()
+        per_manager_limit = 80 if backend == "all" else MAX_RESULTS
+
+        def add_many(items: list[PackageItem], limit: int = per_manager_limit) -> None:
+            added = 0
+            for item in items:
+                if added >= limit:
+                    break
+                key = (item.source, item.package_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(item)
+                added += 1
+
+        if backend in ("all", "pacman") and self.tools.pacman:
+            code, output = run_capture([self.tools.pacman, "-Ss", query])
+            if code not in (0, 1):
+                self.log(f"pacman search exited {code}:\n{output.strip()}")
+            add_many(parse_arch_search(output, "pacman", self.installed_names))
+
+        if backend in ("all", "yay") and self.tools.yay:
+            code, output = run_capture([self.tools.yay, "-Ssa", query])
+            if code not in (0, 1):
+                self.log(f"yay AUR search exited {code}:\n{output.strip()}")
+            add_many(parse_arch_search(output, "yay", self.installed_names, "aur"))
+
+        if backend in ("all", "paru") and self.tools.paru:
+            code, output = run_capture([self.tools.paru, "-Ssa", query])
+            if code not in (0, 1):
+                self.log(f"paru AUR search exited {code}:\n{output.strip()}")
+            add_many(parse_arch_search(output, "paru", self.installed_names, "aur"))
+
+        if backend in ("all", "flatpak") and self.tools.flatpak:
+            code, output = run_capture([self.tools.flatpak, "search", "--json", query], timeout=60)
+            if code not in (0, 1):
+                self.log(f"flatpak search exited {code}:\n{output.strip()}")
+            add_many(parse_flatpak_search(output, self.installed_flatpak_ids))
+
+        if backend in ("all", "apt") and self.tools.apt_cache:
+            code, output = run_capture([self.tools.apt_cache, "search", query], timeout=40)
+            if code not in (0, 1):
+                self.log(f"apt-cache search exited {code}:\n{output.strip()}")
+            add_many(parse_apt_search(output, self.installed_apt_names))
+
+        if backend in ("all", "snap") and self.tools.snap:
+            code, output = run_capture([self.tools.snap, "find", query], timeout=40)
+            if code not in (0, 1):
+                self.log(f"snap find exited {code}:\n{output.strip()}")
+            add_many(parse_snap_search(output, self.installed_snap_names))
+
+        if backend in ("all", "appimage"):
+            add_many(find_appimages(query))
+
+        if backend == "all":
+            for manager in self.tools.extra_managers:
+                spec = MANAGER_SPECS.get(manager, {})
+                if "search" not in spec:
+                    continue
+                cmd = manager_spec_command(manager, "search", self.tools, query=query)
+                if not cmd:
+                    continue
+                code, output = run_capture(cmd, timeout=60)
+                if code not in (0, 1):
+                    self.log(f"{manager} search exited {code}:\n{output.strip()}")
+                    continue
+                add_many(
+                    parse_manager_search(
+                        manager,
+                        output,
+                        self.installed_extra_names.get(manager, set()),
+                    )
+                )
+
+        return results[:MAX_RESULTS]
+
+    def refresh_installed(self, background: bool = False) -> None:
+        def job() -> list[PackageItem]:
+            items: list[PackageItem] = []
+            if self.tools.pacman:
+                _, foreign_output = run_capture([self.tools.pacman, "-Qqm"], timeout=20)
+                foreign_names = {line.strip() for line in foreign_output.splitlines() if line.strip()}
+                code, output = run_capture([self.tools.pacman, "-Q"], timeout=30)
+                if code == 0:
+                    items.extend(parse_pacman_installed(output, foreign_names))
+                else:
+                    self.log(f"pacman installed list exited {code}:\n{output.strip()}")
+
+            if self.tools.flatpak:
+                code, output = run_capture([self.tools.flatpak, "list", "--app", "--json"], timeout=30)
+                if code == 0:
+                    items.extend(parse_flatpak_installed(output))
+                else:
+                    self.log(f"flatpak installed list exited {code}:\n{output.strip()}")
+
+            if self.tools.dpkg_query:
+                code, output = run_capture(
+                    [
+                        self.tools.dpkg_query,
+                        "-W",
+                        "-f=${binary:Package}\\t${Version}\\t${db:Status-Abbrev}\\t${binary:Summary}\\n",
+                    ],
+                    timeout=40,
+                )
+                if code == 0:
+                    items.extend(parse_apt_installed(output))
+                else:
+                    self.log(f"dpkg installed list exited {code}:\n{output.strip()}")
+
+            if self.tools.snap:
+                code, output = run_capture([self.tools.snap, "list"], timeout=30)
+                if code == 0:
+                    items.extend(parse_snap_installed(output))
+                else:
+                    self.log(f"snap installed list exited {code}:\n{output.strip()}")
+
+            for manager in self.tools.extra_managers:
+                spec = MANAGER_SPECS.get(manager, {})
+                if "installed" not in spec:
+                    continue
+                cmd = manager_spec_command(manager, "installed", self.tools)
+                if not cmd:
+                    continue
+                code, output = run_capture(cmd, timeout=45)
+                if code == 0:
+                    items.extend(parse_manager_installed(manager, output))
+                else:
+                    self.log(f"{manager} installed list exited {code}:\n{output.strip()}")
+
+            items.extend(find_appimages())
+
+            return sorted(items, key=lambda item: (item.source, item.name.lower()))
+
+        if background:
+            self.spawn_job("loading installed packages", job)
+        else:
+            self.mode = "installed"
+            self.selected = 0
+            self.scroll = 0
+            self.spawn_job("loading installed packages", job)
+
+    def current_items(self) -> list[PackageItem]:
+        if self.mode == "search":
+            return self.search_results
+        if self.mode == "installed":
+            if not self.installed_filter:
+                return self.installed_items
+            needle = self.installed_filter.lower()
+            return [
+                item
+                for item in self.installed_items
+                if needle in item.name.lower()
+                or needle in item.package_id.lower()
+                or needle in item.source.lower()
+                or needle in item.repo.lower()
+                or needle in item.description.lower()
+            ]
+        return []
+
+    def selected_item(self) -> PackageItem | None:
+        items = self.current_items()
+        if not items:
+            return None
+        self.selected = max(0, min(self.selected, len(items) - 1))
+        return items[self.selected]
+
+    def prompt(self, label: str) -> str:
+        h, w = self.stdscr.getmaxyx()
+        prompt_text = f"{label}: "
+        self.clear_line(h - 1)
+        self.safe_addstr(h - 1, 0, prompt_text[: max(0, w - 1)], curses.color_pair(3))
+        curses.curs_set(1)
+        curses.echo()
+        self.stdscr.timeout(-1)
+        try:
+            raw = self.stdscr.getstr(h - 1, min(len(prompt_text), max(0, w - 1)), max(1, w - len(prompt_text) - 1))
+        except curses.error:
+            raw = b""
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+            self.stdscr.timeout(120)
+        return raw.decode(errors="replace").strip()
+
+    def confirm(self, question: str) -> bool:
+        self.status = f"{question} [y/N]"
+        self.draw()
+        self.stdscr.timeout(-1)
+        try:
+            ch = self.stdscr.getch()
+        finally:
+            self.stdscr.timeout(120)
+        return ch in (ord("y"), ord("Y"))
+
+    def run_interactive(self, title: str, cmd: list[str]) -> int:
+        command_text = shlex.join(cmd)
+        self.log(f"Running: {command_text}")
+        self.status = f"Running: {command_text}"
+        self.draw()
+        curses.def_prog_mode()
+        curses.endwin()
+        code = 1
+        try:
+            print()
+            print(f"{APP_NAME}: {title}")
+            print(f"$ {command_text}")
+            print()
+            code = subprocess.call(cmd)
+            print()
+            print(f"{APP_NAME}: command exited with status {code}")
+            input(f"Press Enter to return to {APP_NAME}...")
+        except KeyboardInterrupt:
+            print()
+            print(f"{APP_NAME}: interrupted")
+            input(f"Press Enter to return to {APP_NAME}...")
+            code = 130
+        finally:
+            curses.reset_prog_mode()
+            self.stdscr.keypad(True)
+            self.stdscr.timeout(120)
+            curses.curs_set(0)
+        self.log(f"Command exited {code}: {command_text}")
+        self.status = f"Command exited {code}."
+        self.refresh_installed(background=True)
+        return code
+
+    def install_selected(self) -> None:
+        item = self.selected_item()
+        if not item:
+            self.status = "No package selected."
+            return
+        if item.source == "appimage":
+            self.show_info()
+            return
+        if item.installed and not self.confirm(f"{item.title()} is already installed. Reinstall anyway?"):
+            self.status = "Install cancelled."
+            return
+        cmd = item.install_command(self.tools)
+        if not cmd:
+            self.status = "No usable install command for this package."
+            return
+        if not self.confirm(f"Install {item.title()} using {item.manager}?"):
+            self.status = "Install cancelled."
+            return
+        self.run_interactive(f"installing {item.title()} - download progress and password prompts are shown below", cmd)
+
+    def remove_selected(self) -> None:
+        item = self.selected_item()
+        if not item:
+            self.status = "No installed package selected."
+            return
+        cmd = item.remove_command(self.tools)
+        if not cmd:
+            self.status = "No usable remove command for this package."
+            return
+        if not self.confirm(f"Remove {item.title()}?"):
+            self.status = "Remove cancelled."
+            return
+        self.run_interactive(f"removing {item.title()}", cmd)
+
+    def update_system(self) -> None:
+        commands: list[list[str]] = []
+        helper = self.tools.aur_helper
+        if helper:
+            _, path = helper
+            commands.append([path, "-Syu"])
+        elif self.tools.pacman and self.tools.privilege:
+            commands.append([self.tools.privilege, self.tools.pacman, "-Syu"])
+        if self.tools.flatpak:
+            commands.append([self.tools.flatpak, "update"])
+        if self.tools.apt and self.tools.privilege:
+            commands.append([self.tools.privilege, self.tools.apt, "update"])
+            commands.append([self.tools.privilege, self.tools.apt, "upgrade"])
+        if self.tools.snap and self.tools.privilege:
+            commands.append([self.tools.privilege, self.tools.snap, "refresh"])
+        for manager in self.tools.extra_managers:
+            cmd = manager_spec_command(manager, "update", self.tools)
+            if cmd:
+                commands.append(cmd)
+
+        if not commands:
+            self.status = "No update-capable package tool found."
+            return
+        if not self.confirm("Run full package update?"):
+            self.status = "Update cancelled."
+            return
+        for cmd in commands:
+            self.run_interactive("updating packages", cmd)
+
+    def show_info(self) -> None:
+        item = self.selected_item()
+        if not item:
+            self.status = "No package selected."
+            return
+        if item.source == "appimage":
+            self.log_appimage_info(item)
+            return
+        cmd = item.info_command(self.tools, self.mode == "installed")
+        if not cmd:
+            self.status = "No info command for this package."
+            return
+
+        def job() -> list[PackageItem]:
+            code, output = run_capture(cmd, timeout=60)
+            self.log("$ " + shlex.join(cmd))
+            if output.strip():
+                self.log(output.rstrip())
+            self.log(f"info command exited {code}")
+            return []
+
+        self.spawn_job(f"loading info for {item.package_id}", job)
+
+    def log_appimage_info(self, item: PackageItem) -> None:
+        path = Path(item.package_id)
+        self.log(f"AppImage: {item.name}")
+        self.log(f"path: {path}")
+        try:
+            stat = path.stat()
+            self.log(f"size: {human_size(stat.st_size)}")
+            self.log(f"mode: {oct(stat.st_mode & 0o777)}")
+            self.log(f"modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))}")
+            self.log(f"executable: {'yes' if os.access(path, os.X_OK) else 'no'}")
+        except OSError as exc:
+            self.log(f"stat failed: {exc}")
+        self.mode = "log"
+        self.selected = len(self.log_lines) - 1
+        self.scroll = 0
+        self.status = "AppImage info loaded in log view."
+
+    def launch_pacseek_search(self, query: str = "") -> None:
+        if not self.tools.pacseek:
+            self.status = "pacseek is not installed."
+            return
+        cmd = [self.tools.pacseek]
+        if query:
+            cmd.append(query)
+        self.run_interactive("launching pacseek", cmd)
+
+    def filter_installed(self) -> None:
+        value = self.prompt("Filter installed packages")
+        self.installed_filter = value
+        self.mode = "installed"
+        self.selected = 0
+        self.scroll = 0
+        if value:
+            self.status = f"Installed filter: {value}"
+        else:
+            self.status = "Installed filter cleared."
+
+    def handle_key(self, ch: int) -> None:
+        if ch == -1:
+            return
+        if ch in (ord("q"), 27):
+            self.running = False
+            return
+        if ch in (curses.KEY_RESIZE,):
+            return
+        if ch in (ord("j"), curses.KEY_DOWN):
+            self.move_selection(1)
+            return
+        if ch in (ord("k"), curses.KEY_UP):
+            self.move_selection(-1)
+            return
+        if ch == curses.KEY_NPAGE:
+            self.move_selection(10)
+            return
+        if ch == curses.KEY_PPAGE:
+            self.move_selection(-10)
+            return
+        if ch == curses.KEY_HOME:
+            self.selected = 0
+            return
+        if ch == curses.KEY_END:
+            if self.mode == "log":
+                self.selected = len(self.log_lines) - 1
+            else:
+                self.selected = len(self.current_items()) - 1
+            return
+        if ch == ord("/"):
+            if self.mode == "installed":
+                self.filter_installed()
+            else:
+                self.search()
+            return
+        if ch == ord("s"):
+            self.mode = "search"
+            self.selected = 0
+            self.scroll = 0
+            self.status = "Search view. Press / to search."
+            return
+        if ch == ord("i"):
+            self.mode = "installed"
+            self.selected = 0
+            self.scroll = 0
+            if not self.installed_items or time.time() - self.last_installed_load > 300:
+                self.refresh_installed(background=False)
+            else:
+                self.status = "Installed packages view."
+            return
+        if ch == ord("l"):
+            self.mode = "log"
+            self.selected = max(0, len(self.log_lines) - 1)
+            self.scroll = 0
+            self.status = "Log view."
+            return
+        if ch == ord("r"):
+            if self.mode == "installed":
+                self.refresh_installed(background=False)
+            elif self.mode == "search" and self.query:
+                self.spawn_job("searching", lambda: self.search_packages(self.query, "all"))
+            else:
+                self.status = "Nothing to refresh."
+            return
+        if ch == ord("u"):
+            self.update_system()
+            return
+        if ch == ord("v"):
+            self.show_info()
+            return
+        if ch in (ord("\n"), curses.KEY_ENTER, 10, 13):
+            if self.mode == "search":
+                self.install_selected()
+            elif self.mode == "installed":
+                self.show_info()
+            return
+        if ch == ord("x"):
+            if self.mode == "installed":
+                self.remove_selected()
+            else:
+                self.status = "Switch to installed view with i before removing packages."
+            return
+        if ch == ord("?"):
+            self.show_help()
+            return
+
+    def show_help(self) -> None:
+        help_text = [
+            "Keys:",
+            "/ search or filter installed packages",
+            "i installed packages section",
+            "s search results section",
+            "Enter install selected search result or show installed package info",
+            "x remove selected installed package",
+            "u update package ecosystems available on this host",
+            "v show package info in log view",
+            "r refresh current section",
+            "l log view",
+            "q quit",
+        ]
+        self.log("\n".join(help_text))
+        self.mode = "log"
+        self.selected = len(self.log_lines) - 1
+        self.status = "Help added to log view."
+
+    def move_selection(self, delta: int) -> None:
+        if self.mode == "log":
+            max_index = max(0, len(self.log_lines) - 1)
+        else:
+            max_index = max(0, len(self.current_items()) - 1)
+        self.selected = max(0, min(max_index, self.selected + delta))
+
+    def ensure_visible(self, view_height: int) -> None:
+        if self.selected < self.scroll:
+            self.scroll = self.selected
+        if self.selected >= self.scroll + view_height:
+            self.scroll = max(0, self.selected - view_height + 1)
+
+    def header_height(self, width: int) -> int:
+        return 4
+
+    def footer_height(self) -> int:
+        return 4
+
+    def animated_rail(self, width: int) -> str:
+        width = max(8, width)
+        cells = ["-"] * width
+        head = self.spinner_index % width
+        cells[head] = ">"
+        cells[(head - 1) % width] = "="
+        cells[(head - 2) % width] = "="
+        return "".join(cells)
+
+    def source_tag(self, source: str) -> str:
+        return {
+            "aur/local": "local",
+            "appimage": "appimg",
+            "flatpak": "flatpak",
+            "pacman": "pacman",
+            "cargo": "cargo",
+            "npm": "npm",
+            "pip": "pip",
+            "pipx": "pipx",
+            "brew": "brew",
+            "aur": "aur",
+            "apt": "apt",
+            "snap": "snap",
+        }.get(source, source)
+
+    def source_attr(self, source: str) -> int:
+        return {
+            "pacman": curses.color_pair(4),
+            "aur": curses.color_pair(6),
+            "aur/local": curses.color_pair(6),
+            "flatpak": curses.color_pair(3),
+            "apt": curses.color_pair(1),
+            "snap": curses.color_pair(5),
+            "appimage": curses.color_pair(3),
+            "cargo": curses.color_pair(4),
+            "npm": curses.color_pair(5),
+            "pip": curses.color_pair(1),
+            "pipx": curses.color_pair(1),
+            "brew": curses.color_pair(4),
+        }.get(source, curses.A_NORMAL)
+
+    def source_summary(self, items: list[PackageItem]) -> str:
+        counts: dict[str, int] = {}
+        for item in items:
+            tag = self.source_tag(item.source)
+            counts[tag] = counts.get(tag, 0) + 1
+        if not counts:
+            return "sources: none"
+        preferred = (
+            "pacman",
+            "aur",
+            "local",
+            "flatpak",
+            "apt",
+            "snap",
+            "appimg",
+            "cargo",
+            "npm",
+            "pip",
+            "pipx",
+            "brew",
+        )
+        parts = [f"{key}:{counts[key]}" for key in preferred if key in counts]
+        parts.extend(f"{key}:{value}" for key, value in sorted(counts.items()) if key not in preferred)
+        return "sources: " + " ".join(parts)
+
+    def draw_box(self, y: int, x: int, height: int, width: int, title: str = "", active: bool = False) -> None:
+        if height <= 1 or width <= 2:
+            return
+        attr = curses.color_pair(1) | curses.A_BOLD if active else curses.A_DIM
+        top = "+" + "-" * max(0, width - 2) + "+"
+        if title and width > 8:
+            title_text = f" {title} "
+            insert = min(3, max(1, width - 4))
+            available = max(0, width - insert - 2)
+            title_text = clip(title_text, available)
+            top = top[:insert] + title_text + top[insert + len(title_text) :]
+        bottom = "+" + "-" * max(0, width - 2) + "+"
+        self.safe_addstr(y, x, top, attr)
+        for row in range(1, height - 1):
+            self.safe_addstr(y + row, x, "|", attr)
+            self.safe_addstr(y + row, x + width - 1, "|", attr)
+        self.safe_addstr(y + height - 1, x, bottom, attr)
+
+    def draw(self) -> None:
+        self.stdscr.erase()
+        h, w = self.stdscr.getmaxyx()
+        if h < 14 or w < 56:
+            self.safe_addstr(0, 0, f"Terminal is too small for {APP_NAME}.")
+            self.stdscr.refresh()
+            return
+
+        self.draw_header(h, w)
+        if self.mode == "log":
+            self.draw_log(h, w)
+        else:
+            self.draw_packages(h, w)
+        self.draw_status(h, w)
+        self.spinner_index += 1
+        self.stdscr.refresh()
+
+    def draw_header(self, h: int, w: int) -> None:
+        header_h = self.header_height(w)
+        self.draw_box(0, 0, header_h, w, " PACKAGE COMMAND DECK ", active=True)
+        rail_w = max(10, min(24, (w - 24) // 2))
+        left_rail = self.animated_rail(rail_w)
+        right_rail = left_rail[::-1].replace("<", ">")
+        signal = SIGNAL_FRAMES[self.spinner_index % len(SIGNAL_FRAMES)]
+        title = f"{left_rail} < {APP_NAME.upper()} > {right_rail}"
+        if w < 88:
+            title = f"< {APP_NAME.upper()} > {signal}"
+        self.safe_addstr(1, max(1, (w - len(title)) // 2), clip(title, w - 4), curses.color_pair(1) | curses.A_BOLD)
+
+        tabs = [
+            ("s", "Search", self.mode == "search"),
+            ("i", "Installed", self.mode == "installed"),
+            ("l", "Log", self.mode == "log"),
+        ]
+        x = 2
+        y = header_h - 2
+        for key, label, active in tabs:
+            text = f"[{key.upper()}:{label.upper()}]"
+            attr = curses.color_pair(2) | curses.A_BOLD if active else curses.color_pair(1)
+            self.safe_addstr(y, x, text[: max(0, w - x - 2)], attr)
+            x += len(text) + 1
+
+    def draw_packages(self, h: int, w: int) -> None:
+        top = self.header_height(w)
+        height = max(1, h - top - self.footer_height())
+        items = self.current_items()
+        wide = w >= 96
+        list_w = w if not wide else min(max(56, int(w * 0.62)), w - 34)
+        detail_x = list_w
+        detail_w = w - detail_x
+        rows_available = max(1, height - 4)
+        self.ensure_visible(rows_available)
+        visible = items[self.scroll : self.scroll + rows_available]
+
+        if self.mode == "search":
+            title = f" SEARCH GRID :: {len(items)} RESULTS "
+        else:
+            title = f" INSTALLED VAULT :: {len(items)} SHOWN "
+        self.draw_box(top, 0, height, list_w, title, active=True)
+        inner_w = max(1, list_w - 2)
+
+        row_start = top + 2
+        source_line = self.source_summary(items)
+        self.safe_addstr(top + 1, 1, clip(source_line, inner_w), curses.A_DIM)
+        if not items:
+            empty = "Press / to search." if self.mode == "search" else "No installed packages loaded."
+            if self.busy:
+                empty = f"{self.busy_label}..."
+            self.safe_addstr(row_start, 2, clip(empty, max(1, inner_w - 2)), curses.A_DIM)
+        for offset, item in enumerate(visible):
+            y = row_start + offset
+            index = self.scroll + offset
+            selected = index == self.selected
+            attr = curses.color_pair(2) if selected else curses.A_NORMAL
+            source_attr = attr if selected else self.source_attr(item.source)
+
+            installed = " [installed]" if item.installed and self.mode == "search" else ""
+            source = clip(self.source_tag(item.source), 7)
+            prefix = f"{index + 1:>4} [{source:<7}] "
+            text = f"{item.name} {item.version}{installed}"
+            self.safe_addstr(y, 1, " " * inner_w, attr)
+            self.safe_addstr(y, 1, clip(prefix, inner_w), source_attr)
+            self.safe_addstr(y, 1 + len(prefix), clip(text, max(0, inner_w - len(prefix))), attr)
+
+        if wide:
+            self.draw_detail(top, detail_x, height, detail_w)
+
+    def draw_detail(self, y: int, x: int, height: int, width: int) -> None:
+        self.draw_box(y, x, height, width, " PACKAGE DOSSIER ", active=False)
+        inner_x = x + 1
+        inner_y = y + 1
+        inner_w = max(1, width - 2)
+        inner_h = max(1, height - 2)
+        item = self.selected_item()
+        if not item:
+            self.safe_addstr(inner_y, inner_x, "No package selected.", curses.A_DIM)
+            return
+
+        lines = [
+            item.title(),
+            f"source: {item.source}",
+            f"manager: {item.manager}",
+            f"version: {item.version or 'unknown'}",
+        ]
+        if item.repo:
+            lines.append(f"repo/remote: {item.repo}")
+        if item.installed:
+            lines.append("state: installed")
+        if item.description:
+            lines.append("")
+            lines.extend(textwrap.wrap(item.description, width=max(10, width - 2)))
+        lines.append("")
+        lines.append("Actions:")
+        if item.source == "appimage":
+            lines.append("Enter/v file info")
+            lines.append("x remove file in installed view")
+        else:
+            lines.append("Enter install/info")
+            lines.append("v package info")
+            lines.append("x remove in installed view")
+
+        for offset, line in enumerate(lines[:inner_h]):
+            attr = curses.A_BOLD if offset == 0 else curses.A_NORMAL
+            if line.startswith("source:"):
+                attr = self.source_attr(item.source)
+            self.safe_addstr(inner_y + offset, inner_x, clip(line, inner_w), attr)
+
+    def draw_log(self, h: int, w: int) -> None:
+        top = self.header_height(w)
+        height = max(1, h - top - self.footer_height())
+        self.draw_box(top, 0, height, w, " EVENT LOG ", active=True)
+        rows_available = max(1, height - 3)
+        self.ensure_visible(rows_available)
+        total = len(self.log_lines)
+        self.safe_addstr(top + 1, 1, clip(f"{total} lines | r refresh current section | ? help", w - 2), curses.color_pair(1) | curses.A_BOLD)
+        start = max(0, min(self.scroll, max(0, total - rows_available)))
+        lines = self.log_lines[start : start + rows_available]
+        for offset, line in enumerate(lines):
+            self.safe_addstr(top + 2 + offset, 1, clip(line, w - 2))
+
+    def draw_status(self, h: int, w: int) -> None:
+        y = h - self.footer_height()
+        self.draw_box(y, 0, self.footer_height(), w, " COMMAND BUS ", active=False)
+        status = self.status
+        if self.busy:
+            status = f"{SPINNER[self.spinner_index % len(SPINNER)]} {status}"
+        self.safe_addstr(y + 1, 1, pad(status, w - 2), curses.color_pair(3))
+        keys = " / search/filter  i installed  s search  Enter install/info  x remove  u update  ? help  q quit "
+        self.safe_addstr(y + 2, 1, pad(keys, w - 2), curses.A_DIM)
+
+    def clear_line(self, y: int) -> None:
+        h, w = self.stdscr.getmaxyx()
+        if 0 <= y < h:
+            self.safe_addstr(y, 0, " " * max(0, w - 1))
+
+    def safe_addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
+        h, w = self.stdscr.getmaxyx()
+        if y < 0 or y >= h or x < 0 or x >= w:
+            return
+        limit = max(0, w - x)
+        if y == h - 1:
+            limit = max(0, limit - 1)
+        try:
+            self.stdscr.addstr(y, x, text[:limit], attr)
+        except curses.error:
+            pass
+
+    def run(self) -> None:
+        self.setup()
+        while self.running:
+            self.poll_events()
+            self.draw()
+            self.handle_key(self.stdscr.getch())
+
+
+def clip(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return text[: width - 1] + ">"
+
+
+def pad(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    return clip(text, width - 1).ljust(max(0, width - 1))
+
+
+def main(stdscr: "curses._CursesWindow") -> None:
+    app = PkgUI(stdscr)
+    app.run()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] in {"-V", "--version"}:
+            print(f"{APP_NAME} {VERSION}")
+            raise SystemExit(0)
+        if sys.argv[1] == "--list-managers":
+            tools = Tools.detect()
+            print(tools.enabled_labels())
+            raise SystemExit(0)
+        if sys.argv[1] in {"-h", "--help"}:
+            print(f"{APP_NAME} {VERSION}")
+            print("usage: pacmangr [--version] [--list-managers]")
+            print("run without arguments to open the terminal UI")
+            raise SystemExit(0)
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
+        raise SystemExit(2)
+    curses.wrapper(main)

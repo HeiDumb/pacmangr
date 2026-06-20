@@ -1,0 +1,27 @@
+pkgbase = pacmangr
+	pkgdesc = Animated terminal package manager for mixed Linux systems
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/HeiDumb/pacmangr
+	arch = any
+	license = MIT
+	depends = python
+	optdepends = pacman: Arch repository package support
+	optdepends = yay: AUR package support
+	optdepends = paru: alternate AUR package support
+	optdepends = pacseek: interactive Arch package lookup
+	optdepends = flatpak: Flatpak application support
+	optdepends = apt: Debian/Ubuntu package support
+	optdepends = snapd: Snap package support
+	optdepends = cargo: Rust crate support
+	optdepends = npm: Node package support
+	optdepends = python-pip: Python package support
+	optdepends = pipx: Python application support
+	optdepends = ruby: gem package support
+	optdepends = luarocks: Lua package support
+	source = pacmangr
+	source = LICENSE
+	sha256sums = 6d84e61a5e1828541fd9228f5e4df7ca158248187bc87381a629e7697f36a057
+	sha256sums = 1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c
+
+pkgname = pacmangr
