@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 pacmangr: an animated terminal package manager for mixed Linux systems.
 
