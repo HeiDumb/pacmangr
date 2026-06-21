@@ -1,6 +1,6 @@
 # Maintainer: HeiDumb <rockygehlot31@gmail.com>
 pkgname=pacmangr
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Animated terminal package manager for mixed Linux systems"
 arch=('any')
@@ -24,7 +24,7 @@ optdepends=(
 )
 source=('pacmangr' 'LICENSE')
 sha256sums=(
-  'c5b0f9e7eea8ed53629637c44f37d55e8de5d29c32fc15e14e2390de10278428'
+  '40123ba8623f4721d2f47c7dda6b337046e70003d3b45129a44972f25ae766af'
   '1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c'
 )
 

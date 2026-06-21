@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Moved the download monitor into a bottom package-view band so it is visible
+  on normal terminal widths, not only wide layouts.
+
 ## 0.1.2
 
 - Added in-TUI sudo password prompt for background package operations.
