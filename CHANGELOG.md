@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2
+
+- Added in-TUI sudo password prompt for background package operations.
+- Added background install/remove/update queue with a download monitor.
+- Added progress, speed, ETA, and last-output tracking for running package jobs.
+- Kept selected packages pinned at the top of search results across new
+  searches.
+- Removed the separate marked queue view from the main navigation.
+
 ## 0.1.1
 
 - Added persistent marked package queue across searches.

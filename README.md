@@ -2,17 +2,19 @@
 
 `pacmangr` is an animated terminal package manager for mixed Linux systems. It
 autodetects installed package managers, shows a unified searchable package view,
-and drops into the real package command for install, remove, and update actions
-so password prompts, confirmations, and download progress stay native.
+and runs install, remove, and update actions in a background queue with an
+in-TUI sudo password prompt and download monitor.
 
 ## Features
 
 - ASCII/curses TUI with search, installed packages, package details, and logs.
 - Unified search across all detected managers that expose search output.
-- Persistent marked package queue for selecting packages across searches.
+- Persistent selected packages pinned above new search results.
+- Background install/remove/update queue with compact progress, speed, and ETA
+  monitor.
 - Installed package inventory across distro managers, language package managers,
   Flatpak, and local AppImages.
-- Native install/remove/update execution through the real backend command.
+- Native install/remove/update execution without leaving the TUI.
 - Default-yes confirmations: pressing Enter on `Y/n` prompts accepts the action.
 - No Python dependencies outside the standard library.
 - Non-interactive checks for packaging: `--version` and `--list-managers`.
@@ -51,15 +53,14 @@ pacmangr
 Keys:
 
 - `/`: search packages, or filter installed packages in the installed view
-- `Space`: mark or unmark the focused package
-- `a`: mark all packages currently shown
-- `m`: marked package queue
-- `c`: clear marked package queue
+- `Space`: select or unselect the focused package
+- `a`: select all packages currently shown
+- `c`: clear selected packages
 - `i`: installed packages
 - `s`: search view
-- `Enter`: install focused package or the marked queue; show info in installed view
-- `x`: remove focused installed package or the marked queue
-- `u`: run update commands for detected managers
+- `Enter`: install focused package or selected packages in the background
+- `x`: remove focused installed package or selected packages in the background
+- `u`: run update commands for detected managers in the background
 - `v`: show package info in the log
 - `r`: refresh current section
 - `l`: log view
