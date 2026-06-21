@@ -5,8 +5,8 @@ pacmangr: an animated terminal package manager for mixed Linux systems.
 It autodetects package managers already present on the host, including distro
 managers, language package managers, Flatpak, and local AppImages. Search/list
 operations run inside curses when a manager exposes parseable output. Install,
-remove, and update operations run in a background queue with an in-TUI sudo
-password prompt and a compact download monitor.
+remove, update, and version-list operations run without replacing the native
+package managers underneath.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import queue
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -30,11 +31,33 @@ from typing import Callable
 
 
 APP_NAME = "pacmangr"
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 SPINNER = "|/-\\"
 SIGNAL_FRAMES = ("--", "\\\\", "||", "//")
 MAX_RESULTS = 500
 APPIMAGE_SCAN_DEPTH = 4
+CACHE_DB_PATH = Path.home() / ".cache" / APP_NAME / "pacmangr.sqlite"
+CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+CACHE_TTL_SECONDS = {
+    "pacman": 6 * 60 * 60,
+    "yay": 3 * 60 * 60,
+    "paru": 3 * 60 * 60,
+    "flatpak": 6 * 60 * 60,
+    "apt": 12 * 60 * 60,
+    "snap": 12 * 60 * 60,
+    "dnf": 12 * 60 * 60,
+    "zypper": 12 * 60 * 60,
+    "apk": 12 * 60 * 60,
+    "xbps": 12 * 60 * 60,
+    "cargo": 24 * 60 * 60,
+    "npm": 24 * 60 * 60,
+    "pip": 24 * 60 * 60,
+    "pipx": 24 * 60 * 60,
+    "gem": 24 * 60 * 60,
+    "luarocks": 24 * 60 * 60,
+    "appimage": 6 * 60 * 60,
+    "downgrade": 6 * 60 * 60,
+}
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -44,6 +67,8 @@ PIP_INDEX_RE = re.compile(r"^([A-Za-z0-9_.+-]+)\s+\(([^)]+)\)")
 PERCENT_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
 SPEED_RE = re.compile(r"(\d+(?:\.\d+)?\s*(?:[KMGT]?i?B|[kMGT]?B|B)/s)", re.IGNORECASE)
 ETA_RE = re.compile(r"(?:eta\s*)?(\d{1,2}:\d{2}(?::\d{2})?)", re.IGNORECASE)
+PACMAN_INFO_RE = re.compile(r"^([^:]+)\s*:\s*(.*)$")
+SUDO_PROMPT = "pacmangr-sudo:"
 
 
 MANAGER_SPECS: dict[str, dict[str, object]] = {
@@ -278,6 +303,7 @@ class Tools:
     paru: str | None
     flatpak: str | None
     pacseek: str | None
+    downgrade: str | None
     apt: str | None
     apt_cache: str | None
     dpkg_query: str | None
@@ -294,6 +320,7 @@ class Tools:
             paru=shutil.which("paru"),
             flatpak=shutil.which("flatpak"),
             pacseek=shutil.which("pacseek"),
+            downgrade=shutil.which("downgrade"),
             apt=shutil.which("apt"),
             apt_cache=shutil.which("apt-cache"),
             dpkg_query=shutil.which("dpkg-query"),
@@ -317,7 +344,7 @@ class Tools:
 
     def enabled_labels(self) -> str:
         labels = []
-        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "pacseek"):
+        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "pacseek", "downgrade"):
             if getattr(self, label):
                 labels.append("dpkg" if label == "dpkg_query" else label)
         labels.extend(name for name in self.extra_managers if name not in labels)
@@ -434,6 +461,16 @@ class PackageItem:
 
 
 @dataclass
+class PackageVersion:
+    package: str
+    version: str
+    manager: str
+    origin: str = ""
+    location: str = ""
+    installed: bool = False
+
+
+@dataclass
 class DownloadJob:
     id: int
     label: str
@@ -453,6 +490,295 @@ def package_key(item: PackageItem) -> tuple[str, str, str]:
     source = "aur" if item.source == "aur/local" else item.source
     manager = "arch" if source in {"pacman", "aur"} else item.manager
     return (source, manager, item.package_id)
+
+
+def package_to_dict(item: PackageItem) -> dict[str, object]:
+    return {
+        "source": item.source,
+        "manager": item.manager,
+        "name": item.name,
+        "package_id": item.package_id,
+        "version": item.version,
+        "description": item.description,
+        "repo": item.repo,
+        "installed": item.installed,
+        "origin": item.origin,
+    }
+
+
+def package_from_dict(data: dict[str, object]) -> PackageItem:
+    return PackageItem(
+        source=str(data.get("source") or ""),
+        manager=str(data.get("manager") or ""),
+        name=str(data.get("name") or ""),
+        package_id=str(data.get("package_id") or data.get("name") or ""),
+        version=str(data.get("version") or ""),
+        description=str(data.get("description") or ""),
+        repo=str(data.get("repo") or ""),
+        installed=bool(data.get("installed")),
+        origin=str(data.get("origin") or ""),
+    )
+
+
+def version_to_dict(item: PackageVersion) -> dict[str, object]:
+    return {
+        "package": item.package,
+        "version": item.version,
+        "manager": item.manager,
+        "origin": item.origin,
+        "location": item.location,
+        "installed": item.installed,
+    }
+
+
+def version_from_dict(data: dict[str, object]) -> PackageVersion:
+    return PackageVersion(
+        package=str(data.get("package") or ""),
+        version=str(data.get("version") or ""),
+        manager=str(data.get("manager") or ""),
+        origin=str(data.get("origin") or ""),
+        location=str(data.get("location") or ""),
+        installed=bool(data.get("installed")),
+    )
+
+
+class PackageCache:
+    def __init__(self, path: Path = CACHE_DB_PATH) -> None:
+        self.path = path
+
+    def connect(self) -> sqlite3.Connection:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.path, timeout=2)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        self.ensure_schema(conn)
+        return conn
+
+    def ensure_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS search_cache (
+                manager TEXT NOT NULL,
+                query TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (manager, query)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS installed_packages (
+                source TEXT NOT NULL,
+                manager TEXT NOT NULL,
+                name TEXT NOT NULL,
+                package_id TEXT NOT NULL,
+                version TEXT,
+                description TEXT,
+                repo TEXT,
+                origin TEXT,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (source, manager, package_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS version_cache (
+                manager TEXT NOT NULL,
+                package_id TEXT NOT NULL,
+                versions_json TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (manager, package_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_search_cache_query ON search_cache(query)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_installed_name ON installed_packages(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_version_cache_package ON version_cache(package_id)")
+        conn.commit()
+
+    def cleanup(self) -> None:
+        cutoff = time.time() - CACHE_MAX_AGE_SECONDS
+        try:
+            with self.connect() as conn:
+                conn.execute("DELETE FROM search_cache WHERE updated_at < ?", (cutoff,))
+                conn.execute("DELETE FROM installed_packages WHERE updated_at < ?", (cutoff,))
+                conn.execute("DELETE FROM version_cache WHERE updated_at < ?", (cutoff,))
+        except sqlite3.Error:
+            return
+
+    def ttl_for(self, manager: str) -> int:
+        return CACHE_TTL_SECONDS.get(manager, CACHE_MAX_AGE_SECONDS)
+
+    def load_search(self, query: str, managers: set[str] | None = None) -> list[PackageItem]:
+        normalized = query.strip().lower()
+        if not normalized:
+            return []
+        now = time.time()
+        items: list[PackageItem] = []
+        try:
+            with self.connect() as conn:
+                rows = conn.execute(
+                    "SELECT manager, result_json, updated_at FROM search_cache WHERE query = ?",
+                    (normalized,),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        for manager, result_json, updated_at in rows:
+            if managers and manager not in managers:
+                continue
+            if now - float(updated_at) > self.ttl_for(str(manager)):
+                continue
+            try:
+                data = json.loads(str(result_json))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, list):
+                continue
+            for entry in data:
+                if isinstance(entry, dict):
+                    item = package_from_dict(entry)
+                    if item.package_id:
+                        items.append(item)
+        return items
+
+    def save_search(self, manager: str, query: str, items: list[PackageItem]) -> None:
+        normalized = query.strip().lower()
+        if not normalized:
+            return
+        payload = json.dumps([package_to_dict(item) for item in items], separators=(",", ":"))
+        try:
+            with self.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO search_cache(manager, query, result_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(manager, query) DO UPDATE SET
+                        result_json = excluded.result_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (manager, normalized, payload, time.time()),
+                )
+        except sqlite3.Error:
+            return
+
+    def load_versions(self, manager: str, package_id: str) -> list[PackageVersion]:
+        package_id = package_id.strip()
+        if not package_id:
+            return []
+        now = time.time()
+        try:
+            with self.connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT versions_json, updated_at FROM version_cache
+                    WHERE manager = ? AND package_id = ?
+                    """,
+                    (manager, package_id),
+                ).fetchone()
+        except sqlite3.Error:
+            return []
+        if not row:
+            return []
+        versions_json, updated_at = row
+        if now - float(updated_at) > self.ttl_for(manager):
+            return []
+        try:
+            data = json.loads(str(versions_json))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+        versions: list[PackageVersion] = []
+        for entry in data:
+            if isinstance(entry, dict):
+                version = version_from_dict(entry)
+                if version.version:
+                    versions.append(version)
+        return versions
+
+    def save_versions(self, manager: str, package_id: str, versions: list[PackageVersion]) -> None:
+        package_id = package_id.strip()
+        if not package_id:
+            return
+        payload = json.dumps([version_to_dict(item) for item in versions], separators=(",", ":"))
+        try:
+            with self.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO version_cache(manager, package_id, versions_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(manager, package_id) DO UPDATE SET
+                        versions_json = excluded.versions_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (manager, package_id, payload, time.time()),
+                )
+        except sqlite3.Error:
+            return
+
+    def load_installed(self) -> list[PackageItem]:
+        cutoff = time.time() - CACHE_MAX_AGE_SECONDS
+        try:
+            with self.connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT source, manager, name, package_id, version, description, repo, origin
+                    FROM installed_packages
+                    WHERE updated_at >= ?
+                    ORDER BY source, name
+                    """,
+                    (cutoff,),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        return [
+            PackageItem(
+                source=source,
+                manager=manager,
+                name=name,
+                package_id=package_id,
+                version=version or "",
+                description=description or "",
+                repo=repo or "",
+                origin=origin or "",
+                installed=True,
+            )
+            for source, manager, name, package_id, version, description, repo, origin in rows
+        ]
+
+    def save_installed(self, items: list[PackageItem]) -> None:
+        now = time.time()
+        rows = [
+            (
+                item.source,
+                item.manager,
+                item.name,
+                item.package_id,
+                item.version,
+                item.description,
+                item.repo,
+                item.origin,
+                now,
+            )
+            for item in items
+            if item.package_id
+        ]
+        try:
+            with self.connect() as conn:
+                conn.execute("DELETE FROM installed_packages")
+                conn.executemany(
+                    """
+                    INSERT INTO installed_packages(
+                        source, manager, name, package_id, version, description, repo, origin, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        except sqlite3.Error:
+            return
 
 
 def strip_ansi(text: str) -> str:
@@ -477,6 +803,220 @@ def run_capture(cmd: list[str], timeout: int = 40) -> tuple[int, str]:
             output = output.decode(errors="replace")
         return (124, f"Timed out after {timeout}s\n{output}")
     return (proc.returncode, strip_ansi(proc.stdout))
+
+
+def parse_key_value_block(output: str) -> dict[str, str]:
+    data: dict[str, str] = {}
+    current = ""
+    for raw in output.splitlines():
+        if not raw.strip():
+            current = ""
+            continue
+        match = PACMAN_INFO_RE.match(raw)
+        if match:
+            current = match.group(1).strip().lower()
+            data[current] = match.group(2).strip()
+        elif current:
+            data[current] = f"{data[current]} {raw.strip()}".strip()
+    return data
+
+
+def parse_package_file_version(package: str, path: Path, arch: str = "") -> str:
+    name = path.name
+    if not name.startswith(f"{package}-"):
+        return ""
+    name = re.sub(r"\.(git)?pkg(\.tar)?\.[A-Za-z0-9]+$", "", name)
+    version_arch = name[len(package) + 1 :]
+    if not re.match(r"^\d", version_arch):
+        return ""
+    parts = version_arch.rsplit("-", 1)
+    if len(parts) != 2:
+        return version_arch
+    version, file_arch = parts
+    known_arches = {arch, "any", "x86_64", "aarch64", "armv7h", "i686"}
+    return version if file_arch in known_arches else version_arch
+
+
+def version_sort_key(version: str) -> list[tuple[int, object]]:
+    parts: list[tuple[int, object]] = []
+    for part in re.split(r"([0-9]+)", version.lower()):
+        if not part:
+            continue
+        parts.append((0, int(part)) if part.isdigit() else (1, part))
+    return parts
+
+
+def dedupe_versions(versions: list[PackageVersion]) -> list[PackageVersion]:
+    merged: dict[str, PackageVersion] = {}
+    for item in versions:
+        if not item.version:
+            continue
+        existing = merged.get(item.version)
+        if not existing:
+            merged[item.version] = item
+            continue
+        existing.installed = existing.installed or item.installed
+        managers = existing.manager.split("/")
+        if item.manager and item.manager not in managers:
+            existing.manager = f"{existing.manager}/{item.manager}" if existing.manager else item.manager
+        origins = [origin.strip() for origin in existing.origin.split(",") if origin.strip()]
+        if item.origin and item.origin not in origins:
+            existing.origin = ", ".join([*origins, item.origin])
+        if not existing.location and item.location:
+            existing.location = item.location
+    deduped = list(merged.values())
+    return sorted(
+        deduped,
+        key=lambda item: (item.installed, version_sort_key(item.version), item.origin),
+        reverse=True,
+    )
+
+
+def pacman_architecture() -> str:
+    pacman_conf = shutil.which("pacman-conf")
+    if not pacman_conf:
+        return ""
+    code, output = run_capture([pacman_conf, "Architecture"], timeout=10)
+    if code == 0:
+        return output.splitlines()[0].strip()
+    return ""
+
+
+def pacman_cache_dirs() -> list[Path]:
+    paths: list[Path] = []
+    pacman_conf = shutil.which("pacman-conf")
+    if pacman_conf:
+        code, output = run_capture([pacman_conf, "CacheDir"], timeout=10)
+        if code == 0:
+            paths.extend(Path(line.strip()) for line in output.splitlines() if line.strip())
+    paths.append(Path("/var/cache/pacman/pkg"))
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    paths.extend([cache_home / "yay", cache_home / "paru" / "clone"])
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        deduped.append(path)
+    return deduped
+
+
+def package_files_for(package: str, roots: list[Path], max_depth: int = 4) -> list[Path]:
+    matches: list[Path] = []
+    for root in roots:
+        try:
+            root_depth = len(root.parts)
+            for dirpath, dirnames, filenames in os.walk(root):
+                path = Path(dirpath)
+                if len(path.parts) - root_depth >= max_depth:
+                    dirnames[:] = []
+                for filename in filenames:
+                    if filename.endswith(".sig"):
+                        continue
+                    if filename.startswith(f"{package}-") and ".pkg" in filename:
+                        matches.append(path / filename)
+        except OSError:
+            continue
+    return matches
+
+
+def pacman_log_versions(package: str) -> list[PackageVersion]:
+    path = Path("/var/log/pacman.log")
+    versions: list[PackageVersion] = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return versions
+    escaped = re.escape(package)
+    pattern = re.compile(
+        rf"\[ALPM\] (?:installed|upgraded|downgraded) {escaped} \((?:(?P<old>[^)]*?) -> )?(?P<new>[^)]*)\)"
+    )
+    for line in lines:
+        match = pattern.search(line)
+        if not match:
+            continue
+        for group in ("old", "new"):
+            version = (match.group(group) or "").strip()
+            if version:
+                versions.append(PackageVersion(package, version, "pacman", "pacman.log", str(path)))
+    return versions
+
+
+def arch_versions_for(tools: Tools, item: PackageItem) -> list[PackageVersion]:
+    package = item.package_id
+    versions: list[PackageVersion] = []
+    if item.version:
+        versions.append(PackageVersion(package, item.version, item.manager, "shown result", installed=item.installed))
+    if tools.pacman:
+        code, output = run_capture([tools.pacman, "-Qi", package], timeout=20)
+        if code == 0:
+            data = parse_key_value_block(output)
+            version = data.get("version", "")
+            if version:
+                versions.append(PackageVersion(package, version, "pacman", "installed", installed=True))
+        code, output = run_capture([tools.pacman, "-Si", package], timeout=30)
+        if code == 0:
+            data = parse_key_value_block(output)
+            version = data.get("version", "")
+            repo = data.get("repository", "repo")
+            if version:
+                versions.append(PackageVersion(package, version, "pacman", repo))
+    helper_path = tools.yay if item.manager == "yay" else tools.paru if item.manager == "paru" else None
+    if helper_path:
+        code, output = run_capture([helper_path, "-Si", package], timeout=40)
+        if code == 0:
+            data = parse_key_value_block(output)
+            version = data.get("version", "")
+            if version:
+                versions.append(PackageVersion(package, version, item.manager, "aur"))
+    arch = pacman_architecture()
+    for path in package_files_for(package, pacman_cache_dirs()):
+        version = parse_package_file_version(package, path, arch)
+        if version:
+            versions.append(PackageVersion(package, version, "downgrade", "local cache", str(path)))
+    versions.extend(pacman_log_versions(package))
+    return dedupe_versions(versions)
+
+
+def apt_versions_for(tools: Tools, item: PackageItem) -> list[PackageVersion]:
+    if not tools.apt_cache:
+        return dedupe_versions([
+            PackageVersion(item.package_id, item.version, item.manager, "shown result", installed=item.installed)
+        ])
+    versions = [
+        PackageVersion(item.package_id, item.version, item.manager, "shown result", installed=item.installed)
+    ] if item.version else []
+    code, output = run_capture([tools.apt_cache, "policy", item.package_id], timeout=30)
+    if code == 0:
+        for line in output.splitlines():
+            stripped = line.strip().lstrip("*").strip()
+            if re.match(r"^[0-9][^\s]*\s+\d+", stripped):
+                version = stripped.split()[0]
+                versions.append(PackageVersion(item.package_id, version, "apt", "apt policy"))
+    return dedupe_versions(versions)
+
+
+def package_versions(tools: Tools, item: PackageItem) -> list[PackageVersion]:
+    if item.source in {"pacman", "aur", "aur/local"} or item.manager in {"pacman", "yay", "paru"}:
+        return arch_versions_for(tools, item)
+    if item.source == "apt":
+        return apt_versions_for(tools, item)
+    versions = []
+    if item.version:
+        versions.append(PackageVersion(item.package_id, item.version, item.manager, "shown result", installed=item.installed))
+    return dedupe_versions(versions)
+
+
+def format_versions(package: str, versions: list[PackageVersion]) -> str:
+    if not versions:
+        return f"No versions found for {package}."
+    rows = [f"Versions for {package} ({len(versions)}):"]
+    for index, item in enumerate(versions, start=1):
+        marker = " installed" if item.installed else ""
+        origin = f" [{item.origin}]" if item.origin else ""
+        rows.append(f"{index:>2}. {item.version}{marker} - {item.manager}{origin}")
+    return "\n".join(rows)
 
 
 def parse_arch_search(
@@ -1052,6 +1592,7 @@ class PkgUI:
     def __init__(self, stdscr: "curses._CursesWindow") -> None:
         self.stdscr = stdscr
         self.tools = Tools.detect()
+        self.cache = PackageCache()
         self.mode = "search"
         self.search_backend = "all"
         self.query = ""
@@ -1062,6 +1603,14 @@ class PkgUI:
         self.download_jobs: list[DownloadJob] = []
         self.next_download_id = 1
         self.download_thread_active = False
+        self.version_rows: list[PackageVersion] = []
+        self.version_target_key: tuple[str, str, str] | None = None
+        self.version_pending_manager = ""
+        self.version_pending_package = ""
+        self.version_shelf_open = False
+        self.version_focus = False
+        self.version_cursor = 0
+        self.version_scroll = 0
         self.installed_names: set[str] = set()
         self.installed_apt_names: set[str] = set()
         self.installed_flatpak_ids: set[str] = set()
@@ -1084,6 +1633,8 @@ class PkgUI:
         self.stdscr.keypad(True)
         self.stdscr.timeout(120)
         self.log(f"Detected tools: {self.tools.enabled_labels()}")
+        self.cache.cleanup()
+        self.load_cached_installed()
         self.refresh_installed(background=True)
 
     def set_cursor(self, visible: bool) -> None:
@@ -1117,6 +1668,38 @@ class PkgUI:
         for line in str(message).splitlines() or [""]:
             self.log_lines.append(f"[{stamp}] {line}")
         self.log_lines = self.log_lines[-1000:]
+
+    def load_cached_installed(self) -> None:
+        cached = self.cache.load_installed()
+        if not cached:
+            return
+        self.apply_installed_items(cached)
+        self.status = f"Loaded {len(cached)} installed packages from local cache."
+        self.log(self.status)
+
+    def apply_installed_items(self, items: list[PackageItem]) -> None:
+        self.installed_items = items
+        self.installed_names = {
+            item.package_id for item in self.installed_items if item.source in ("pacman", "aur/local")
+        }
+        self.installed_apt_names = {
+            item.package_id for item in self.installed_items if item.source == "apt"
+        }
+        self.installed_flatpak_ids = {
+            item.package_id for item in self.installed_items if item.source == "flatpak"
+        }
+        self.installed_snap_names = {
+            item.package_id for item in self.installed_items if item.source == "snap"
+        }
+        self.installed_extra_names = {
+            manager: {
+                item.package_id
+                for item in self.installed_items
+                if item.source == manager
+            }
+            for manager in self.tools.extra_managers
+        }
+        self.refresh_marked_metadata(self.installed_items)
 
     def spawn_job(self, label: str, fn: Callable[[], object]) -> None:
         if self.busy:
@@ -1185,33 +1768,25 @@ class PkgUI:
                     self.status = f"Found {len(self.search_results)} packages for {self.query!r}."
                     self.log(self.status)
                 elif label == "loading installed packages":
-                    self.installed_items = result  # type: ignore[assignment]
-                    self.refresh_marked_metadata(self.installed_items)
-                    self.installed_names = {
-                        item.package_id
-                        for item in self.installed_items
-                        if item.source in ("pacman", "aur/local")
-                    }
-                    self.installed_apt_names = {
-                        item.package_id for item in self.installed_items if item.source == "apt"
-                    }
-                    self.installed_flatpak_ids = {
-                        item.package_id for item in self.installed_items if item.source == "flatpak"
-                    }
-                    self.installed_snap_names = {
-                        item.package_id for item in self.installed_items if item.source == "snap"
-                    }
-                    self.installed_extra_names = {
-                        manager: {
-                            item.package_id
-                            for item in self.installed_items
-                            if item.source == manager
-                        }
-                        for manager in self.tools.extra_managers
-                    }
+                    self.apply_installed_items(result)  # type: ignore[arg-type]
+                    self.cache.save_installed(self.installed_items)
                     self.last_installed_load = time.time()
                     self.status = f"Loaded {len(self.installed_items)} installed packages."
                     self.log(self.status)
+                elif label.startswith("loading versions"):
+                    versions = result if isinstance(result, list) else []
+                    self.version_rows = versions  # type: ignore[assignment]
+                    self.cache.save_versions(
+                        self.version_pending_manager,
+                        self.version_pending_package,
+                        self.version_rows,
+                    )
+                    self.version_shelf_open = True
+                    self.version_focus = True
+                    self.version_cursor = 0
+                    self.version_scroll = 0
+                    self.status = f"Loaded {len(self.version_rows)} versions for {self.version_pending_package}."
+                    self.log(format_versions(self.version_pending_package, self.version_rows))
                 elif label.startswith("loading info"):
                     self.mode = "log"
                     self.selected = len(self.log_lines) - 1
@@ -1229,11 +1804,82 @@ class PkgUI:
         self.mode = "search"
         self.selected = 0
         self.scroll = 0
+        cached = self.cache.load_search(query, self.enabled_search_managers("all"))
+        if cached:
+            self.search_results = self.rank_results(self.dedupe_items(cached), query)[:MAX_RESULTS]
+            self.refresh_marked_metadata(self.search_results)
+            self.status = f"Loaded {len(self.search_results)} cached results; refreshing live."
+            self.log(self.status)
 
         def job() -> list[PackageItem]:
             return self.search_packages(query, "all")
 
         self.spawn_job("searching", job)
+
+    def enabled_search_managers(self, backend: str) -> set[str]:
+        managers: set[str] = set()
+        if backend in ("all", "pacman") and self.tools.pacman:
+            managers.add("pacman")
+        if backend in ("all", "yay") and self.tools.yay:
+            managers.add("yay")
+        if backend in ("all", "paru") and self.tools.paru:
+            managers.add("paru")
+        if backend in ("all", "flatpak") and self.tools.flatpak:
+            managers.add("flatpak")
+        if backend in ("all", "apt") and self.tools.apt_cache:
+            managers.add("apt")
+        if backend in ("all", "snap") and self.tools.snap:
+            managers.add("snap")
+        if backend in ("all", "appimage"):
+            managers.add("appimage")
+        if backend == "all":
+            for manager in self.tools.extra_managers:
+                if "search" in MANAGER_SPECS.get(manager, {}):
+                    managers.add(manager)
+        return managers
+
+    def dedupe_items(self, items: list[PackageItem]) -> list[PackageItem]:
+        deduped: list[PackageItem] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            key = (item.source, item.package_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def result_score(self, item: PackageItem, query: str) -> int:
+        q = query.lower().strip()
+        name = item.name.lower()
+        description = item.description.lower()
+        score = 0
+        if q and name == q:
+            score += 1000
+        elif q and name.startswith(q):
+            score += 700
+        elif q and q in name:
+            score += 500
+        elif q and q in description:
+            score += 250
+        if item.installed:
+            score += 300
+        if item.manager in {"pacman", "apt", "dnf", "zypper", "apk", "xbps"}:
+            score += 200
+        elif item.manager == "flatpak":
+            score += 150
+        elif item.manager in {"yay", "paru"}:
+            score += 120
+        elif item.manager in {"npm", "pip", "cargo", "gem", "luarocks"}:
+            score -= 150
+        score -= min(len(item.name), 80) // 8
+        return score
+
+    def rank_results(self, items: list[PackageItem], query: str) -> list[PackageItem]:
+        return sorted(
+            items,
+            key=lambda item: (-self.result_score(item, query), item.name.lower(), item.source),
+        )
 
     def search_packages(self, query: str, backend: str) -> list[PackageItem]:
         results: list[PackageItem] = []
@@ -1256,40 +1902,60 @@ class PkgUI:
             code, output = run_capture([self.tools.pacman, "-Ss", query])
             if code not in (0, 1):
                 self.log(f"pacman search exited {code}:\n{output.strip()}")
-            add_many(parse_arch_search(output, "pacman", self.installed_names))
+            parsed = parse_arch_search(output, "pacman", self.installed_names)
+            if code in (0, 1):
+                self.cache.save_search("pacman", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "yay") and self.tools.yay:
             code, output = run_capture([self.tools.yay, "-Ssa", query])
             if code not in (0, 1):
                 self.log(f"yay AUR search exited {code}:\n{output.strip()}")
-            add_many(parse_arch_search(output, "yay", self.installed_names, "aur"))
+            parsed = parse_arch_search(output, "yay", self.installed_names, "aur")
+            if code in (0, 1):
+                self.cache.save_search("yay", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "paru") and self.tools.paru:
             code, output = run_capture([self.tools.paru, "-Ssa", query])
             if code not in (0, 1):
                 self.log(f"paru AUR search exited {code}:\n{output.strip()}")
-            add_many(parse_arch_search(output, "paru", self.installed_names, "aur"))
+            parsed = parse_arch_search(output, "paru", self.installed_names, "aur")
+            if code in (0, 1):
+                self.cache.save_search("paru", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "flatpak") and self.tools.flatpak:
             code, output = run_capture([self.tools.flatpak, "search", "--json", query], timeout=60)
             if code not in (0, 1):
                 self.log(f"flatpak search exited {code}:\n{output.strip()}")
-            add_many(parse_flatpak_search(output, self.installed_flatpak_ids))
+            parsed = parse_flatpak_search(output, self.installed_flatpak_ids)
+            if code in (0, 1):
+                self.cache.save_search("flatpak", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "apt") and self.tools.apt_cache:
             code, output = run_capture([self.tools.apt_cache, "search", query], timeout=40)
             if code not in (0, 1):
                 self.log(f"apt-cache search exited {code}:\n{output.strip()}")
-            add_many(parse_apt_search(output, self.installed_apt_names))
+            parsed = parse_apt_search(output, self.installed_apt_names)
+            if code in (0, 1):
+                self.cache.save_search("apt", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "snap") and self.tools.snap:
             code, output = run_capture([self.tools.snap, "find", query], timeout=40)
             if code not in (0, 1):
                 self.log(f"snap find exited {code}:\n{output.strip()}")
-            add_many(parse_snap_search(output, self.installed_snap_names))
+            parsed = parse_snap_search(output, self.installed_snap_names)
+            if code in (0, 1):
+                self.cache.save_search("snap", query, parsed)
+            add_many(parsed)
 
         if backend in ("all", "appimage"):
-            add_many(find_appimages(query))
+            parsed = find_appimages(query)
+            self.cache.save_search("appimage", query, parsed)
+            add_many(parsed)
 
         if backend == "all":
             for manager in self.tools.extra_managers:
@@ -1303,15 +1969,15 @@ class PkgUI:
                 if code not in (0, 1):
                     self.log(f"{manager} search exited {code}:\n{output.strip()}")
                     continue
-                add_many(
-                    parse_manager_search(
-                        manager,
-                        output,
-                        self.installed_extra_names.get(manager, set()),
-                    )
+                parsed = parse_manager_search(
+                    manager,
+                    output,
+                    self.installed_extra_names.get(manager, set()),
                 )
+                self.cache.save_search(manager, query, parsed)
+                add_many(parsed)
 
-        return results[:MAX_RESULTS]
+        return self.rank_results(results, query)[:MAX_RESULTS]
 
     def refresh_installed(self, background: bool = False) -> None:
         def job() -> list[PackageItem]:
@@ -1489,6 +2155,20 @@ class PkgUI:
 
     def command_uses_doas(self, cmd: list[str]) -> bool:
         return bool(cmd and Path(cmd[0]).name == "doas")
+
+    def command_tool_name(self, cmd: list[str]) -> str:
+        if not cmd:
+            return ""
+        index = 1 if self.command_uses_sudo(cmd) or self.command_uses_doas(cmd) else 0
+        if index >= len(cmd):
+            return ""
+        return Path(cmd[index]).name
+
+    def command_uses_helper_sudo(self, cmd: list[str]) -> bool:
+        return self.command_tool_name(cmd) in {"yay", "paru"}
+
+    def command_needs_sudo_password(self, cmd: list[str]) -> bool:
+        return self.command_uses_sudo(cmd) or self.command_uses_helper_sudo(cmd)
 
     def package_summary(self, items: list[PackageItem]) -> str:
         if not items:
@@ -1681,6 +2361,10 @@ class PkgUI:
             if option not in prepared[real_index + 1 :]:
                 prepared.insert(real_index + 1, option)
 
+        def insert_pair_after_tool(option: str, value: str) -> None:
+            if option not in prepared[real_index + 1 :]:
+                prepared[real_index + 1 : real_index + 1] = [option, value]
+
         def insert_after_subcommand(option: str) -> None:
             if option not in prepared[real_index + 1 :]:
                 prepared.insert(min(real_index + 2, len(prepared)), option)
@@ -1688,6 +2372,20 @@ class PkgUI:
         if tool in {"pacman", "yay", "paru"} and "--noconfirm" not in prepared:
             if any(arg.startswith("-S") or arg.startswith("-R") for arg in prepared[real_index + 1 :]):
                 insert_after_tool("--noconfirm")
+        if tool in {"yay", "paru"}:
+            insert_pair_after_tool("--sudoflags", f"-S -p {SUDO_PROMPT}")
+            if tool == "yay":
+                for option, value in (
+                    ("--answerclean", "none"),
+                    ("--answerdiff", "none"),
+                    ("--answeredit", "none"),
+                    ("--answerupgrade", "none"),
+                ):
+                    insert_pair_after_tool(option, value)
+                insert_after_tool("--noremovemake")
+            else:
+                insert_after_tool("--skipreview")
+                insert_after_tool("--noremovemake")
         elif tool == "flatpak" and action in {"install", "remove", "update"}:
             insert_after_subcommand("-y")
         elif tool in {"apt", "apt-get"}:
@@ -1711,14 +2409,17 @@ class PkgUI:
         return [cmd[0], "-S", "-p", "", *cmd[1:]]
 
     def ensure_sudo_password(self, commands: list[tuple[str, list[str]]]) -> str | None:
-        sudo_commands = [cmd for _, cmd in commands if self.command_uses_sudo(cmd)]
+        sudo_commands = [cmd for _, cmd in commands if self.command_needs_sudo_password(cmd)]
         doas_commands = [cmd for _, cmd in commands if self.command_uses_doas(cmd)]
         if doas_commands:
             self.status = "Background password entry currently supports sudo, not doas."
             return None
         if not sudo_commands:
             return ""
-        sudo = sudo_commands[0][0]
+        sudo = self.tools.sudo
+        if not sudo:
+            self.status = "sudo is required for background helper password entry."
+            return None
         try:
             cached = subprocess.run(
                 [sudo, "-n", "true"],
@@ -1806,14 +2507,14 @@ class PkgUI:
 
     def run_download_process(self, job_id: int, cmd: list[str], password: str) -> int:
         run_cmd = self.command_with_sudo_stdin(cmd)
-        use_sudo = self.command_uses_sudo(cmd)
+        use_password_stdin = self.command_needs_sudo_password(cmd)
         master_fd = -1
         slave_fd = -1
         try:
             master_fd, slave_fd = pty.openpty()
             proc = subprocess.Popen(
                 run_cmd,
-                stdin=subprocess.PIPE if use_sudo else subprocess.DEVNULL,
+                stdin=subprocess.PIPE if use_password_stdin else subprocess.DEVNULL,
                 stdout=slave_fd,
                 stderr=slave_fd,
                 text=False,
@@ -1831,7 +2532,7 @@ class PkgUI:
 
         if proc.stdin:
             try:
-                if use_sudo and password:
+                if use_password_stdin and password:
                     proc.stdin.write((password + "\n").encode())
                     proc.stdin.flush()
             except BrokenPipeError:
@@ -1937,6 +2638,39 @@ class PkgUI:
             return
         self.start_background_commands("updating packages", [(shlex.join(cmd), cmd) for cmd in commands], "update")
 
+    def version_cache_manager(self, item: PackageItem) -> str:
+        if item.source in {"pacman", "aur", "aur/local"} or item.manager in {"pacman", "yay", "paru"}:
+            return "downgrade"
+        return item.manager or item.source
+
+    def show_versions(self) -> None:
+        item = self.selected_item()
+        if not item:
+            self.status = "No package selected."
+            return
+        manager = self.version_cache_manager(item)
+        self.version_pending_manager = manager
+        self.version_pending_package = item.package_id
+        self.version_target_key = package_key(item)
+        self.version_shelf_open = True
+        self.version_focus = True
+        self.version_cursor = 0
+        self.version_scroll = 0
+        self.scroll = max(0, self.selected - 2)
+        cached = self.cache.load_versions(manager, item.package_id)
+        if cached:
+            self.version_rows = cached
+            self.status = f"Loaded {len(cached)} cached versions; refreshing."
+            self.log(format_versions(item.package_id, cached))
+        else:
+            self.version_rows = []
+            self.status = f"Loading versions for {item.package_id}."
+
+        def job() -> list[PackageVersion]:
+            return package_versions(self.tools, item)
+
+        self.spawn_job(f"loading versions for {item.package_id}", job)
+
     def show_info(self) -> None:
         item = self.selected_item()
         if not item:
@@ -2000,6 +2734,35 @@ class PkgUI:
     def handle_key(self, ch: int) -> None:
         if ch == -1:
             return
+
+        if self.version_shelf_open and self.version_focus:
+            if ch == ord("q"):
+                self.version_shelf_open = False
+                self.version_focus = False
+                self.status = "Closed version shelf."
+                return
+            if ch in (ord("j"), curses.KEY_DOWN):
+                self.move_version_selection(1)
+                return
+            if ch in (ord("k"), curses.KEY_UP):
+                self.move_version_selection(-1)
+                return
+            if ch == curses.KEY_NPAGE:
+                self.move_version_selection(5)
+                return
+            if ch == curses.KEY_PPAGE:
+                self.move_version_selection(-5)
+                return
+            if ch in (ord("\n"), curses.KEY_ENTER, 10, 13):
+                self.install_selected_version(pin=False)
+                return
+            if ch == ord("p"):
+                self.install_selected_version(pin=True)
+                return
+
+            self.status = "Version shelf active. Use j/k, Enter, p, or q."
+            return
+
         if ch in (ord("q"), 27):
             self.running = False
             return
@@ -2064,8 +2827,8 @@ class PkgUI:
         if ch == ord("u"):
             self.update_system()
             return
-        if ch == ord("v"):
-            self.show_info()
+        if ch in (ord("v"), ord("V")):
+            self.show_versions()
             return
         if ch == ord(" "):
             self.toggle_mark_selected()
@@ -2092,6 +2855,37 @@ class PkgUI:
             self.show_help()
             return
 
+    def move_version_selection(self, delta: int) -> None:
+        if not self.version_rows:
+            return
+        max_index = max(0, len(self.version_rows) - 1)
+        self.version_cursor = max(0, min(max_index, self.version_cursor + delta))
+
+        shelf_height = 5
+        if self.version_cursor < self.version_scroll:
+            self.version_scroll = self.version_cursor
+        elif self.version_cursor >= self.version_scroll + shelf_height:
+            self.version_scroll = self.version_cursor - shelf_height + 1
+
+        version = self.version_rows[self.version_cursor]
+        self.status = f"Selected version {version.version}."
+
+    def selected_version(self) -> PackageVersion | None:
+        if not self.version_rows:
+            return None
+        self.version_cursor = max(0, min(self.version_cursor, len(self.version_rows) - 1))
+        return self.version_rows[self.version_cursor]
+
+    def install_selected_version(self, pin: bool = False) -> None:
+        item = self.selected_item()
+        version = self.selected_version()
+        if not item or not version:
+            self.status = "No version selected."
+            return
+        pin_text = " with pin" if pin else ""
+        self.status = f"Selected {item.package_id} {version.version} for downgrade{pin_text}."
+        self.log(f"version selected: {item.package_id} -> {version.version} ({version.origin or version.manager})")
+
     def show_help(self) -> None:
         help_text = [
             "Keys:",
@@ -2105,6 +2899,7 @@ class PkgUI:
             "x remove focused installed package or selected packages",
             "u update package ecosystems in the background",
             "v show package info in log view",
+            "V list available/cached versions",
             "r refresh current section",
             "l log view",
             "q quit",
@@ -2298,28 +3093,74 @@ class PkgUI:
             if self.busy:
                 empty = f"{self.busy_label}..."
             self.safe_addstr(row_start, 2, clip(empty, max(1, inner_w - 2)), curses.A_DIM)
-        for offset, item in enumerate(visible):
-            y = row_start + offset
-            index = self.scroll + offset
+        row_y = row_start
+        index = self.scroll
+        bottom_y = top + height - 1
+
+        while index < len(items) and row_y < bottom_y:
+            item = items[index]
             selected = index == self.selected
             attr = curses.color_pair(2) if selected else curses.A_NORMAL
-            source_attr = attr if selected else self.source_attr(item.source)
-            mark_attr = attr if selected else curses.color_pair(3) | curses.A_BOLD
             mark = "*" if self.is_marked(item) else " "
+            cursor = ">" if selected else " "
 
-            installed = " [installed]" if item.installed and self.mode == "search" else ""
-            source = clip(self.source_tag(item.source), 7)
-            prefix = f"{mark}{index + 1:>3} [{source:<7}] "
-            text = f"{item.name} {item.version}{installed}"
-            self.safe_addstr(y, 1, " " * inner_w, attr)
-            self.safe_addstr(y, 1, mark, mark_attr)
-            self.safe_addstr(y, 2, clip(prefix[1:], max(0, inner_w - 1)), source_attr)
-            self.safe_addstr(y, 1 + len(prefix), clip(text, max(0, inner_w - len(prefix))), attr)
+            self.safe_addstr(row_y, 1, " " * inner_w, attr)
+            line = f"{cursor}{mark} {item.name}"
+            self.safe_addstr(row_y, 1, clip(line, inner_w), attr)
+            row_y += 1
+
+            if (
+                self.version_shelf_open
+                and self.version_target_key == package_key(item)
+                and row_y < bottom_y
+            ):
+                row_y = self.draw_version_shelf(row_y, 1, inner_w, bottom_y)
+
+            index += 1
 
         if wide:
             self.draw_detail(top, detail_x, height, detail_w)
         if monitor_h:
             self.draw_downloads(top + height, 0, monitor_h, w)
+
+    def draw_version_shelf(self, y: int, x: int, width: int, bottom_y: int) -> int:
+        shelf_h = min(5, max(0, bottom_y - y - 1))
+        total = len(self.version_rows)
+
+        header = f"  ├─ versions {self.version_cursor + 1 if total else 0}/{total}"
+        self.safe_addstr(y, x, clip(header, width), curses.color_pair(1) | curses.A_BOLD)
+        y += 1
+
+        if shelf_h <= 0:
+            return y
+
+        if not self.version_rows:
+            msg = "  │  loading versions..." if self.busy_label.startswith("loading versions") else "  │  no versions found"
+            self.safe_addstr(y, x, clip(msg, width), curses.A_DIM)
+            y += 1
+        else:
+            if self.version_cursor < self.version_scroll:
+                self.version_scroll = self.version_cursor
+            if self.version_cursor >= self.version_scroll + shelf_h:
+                self.version_scroll = self.version_cursor - shelf_h + 1
+
+            visible_versions = self.version_rows[self.version_scroll : self.version_scroll + shelf_h]
+            for offset, version in enumerate(visible_versions):
+                version_index = self.version_scroll + offset
+                focused = version_index == self.version_cursor
+                attr = curses.color_pair(2) if focused else curses.A_NORMAL
+                marker = ">" if focused else " "
+                state = "installed" if version.installed else (version.origin or version.manager or "remote")
+                line = f"  │  {marker} {version.version:<16} {state}"
+                self.safe_addstr(y, x, clip(line, width), attr)
+                y += 1
+
+        if y < bottom_y:
+            footer = "  └─ Enter select | p pin | Esc close"
+            self.safe_addstr(y, x, clip(footer, width), curses.A_DIM)
+            y += 1
+
+        return y
 
     def draw_detail(self, y: int, x: int, height: int, width: int) -> None:
         self.draw_box(y, x, height, width, " PACKAGE DOSSIER ", active=False)
@@ -2346,6 +3187,18 @@ class PkgUI:
         if item.description:
             lines.append("")
             lines.extend(textwrap.wrap(item.description, width=max(10, width - 2)))
+        if self.version_target_key == package_key(item):
+            lines.append("")
+            if self.version_rows:
+                lines.append(f"Versions ({len(self.version_rows)}):")
+                for version in self.version_rows[:6]:
+                    installed = " *" if version.installed else ""
+                    origin = f" [{version.origin}]" if version.origin else ""
+                    lines.append(f"{version.version}{installed} - {version.manager}{origin}")
+                if len(self.version_rows) > 6:
+                    lines.append(f"+{len(self.version_rows) - 6} more in log")
+            elif self.busy_label.startswith("loading versions"):
+                lines.append("Versions: loading...")
         lines.append("")
         lines.append("Actions:")
         lines.append("Space select/unselect")
@@ -2355,6 +3208,7 @@ class PkgUI:
         else:
             lines.append("Enter install or info")
             lines.append("v package info")
+            lines.append("V versions")
             lines.append("x remove installed/selected")
 
         for offset, line in enumerate(lines[:inner_h]):
@@ -2427,7 +3281,7 @@ class PkgUI:
         if self.marked and "selected:" not in status:
             status = f"{status}  | selected:{len(self.marked)}"
         self.safe_addstr(y + 1, 1, pad(status, w - 2), curses.color_pair(3))
-        keys = " / search  Space select  a all  c clear  Enter install/bg  x remove/bg  u update/bg  ? help "
+        keys = "/ search  Space select  Enter install  x remove  V versions  u update  ? help"
         self.safe_addstr(y + 2, 1, pad(keys, w - 2), curses.A_DIM)
 
     def clear_line(self, y: int) -> None:
@@ -2485,9 +3339,24 @@ if __name__ == "__main__":
             tools = Tools.detect()
             print(tools.enabled_labels())
             raise SystemExit(0)
+        if sys.argv[1] == "versions":
+            if len(sys.argv) < 3:
+                print("usage: pacmangr versions <package>", file=sys.stderr)
+                raise SystemExit(2)
+            package = sys.argv[2]
+            tools = Tools.detect()
+            cache = PackageCache()
+            item = PackageItem("pacman", "pacman", package, package)
+            versions = package_versions(tools, item)
+            if versions:
+                cache.save_versions("downgrade", package, versions)
+            else:
+                versions = cache.load_versions("downgrade", package)
+            print(format_versions(package, versions))
+            raise SystemExit(0)
         if sys.argv[1] in {"-h", "--help"}:
             print(f"{APP_NAME} {VERSION}")
-            print("usage: pacmangr [--version] [--list-managers]")
+            print("usage: pacmangr [--version] [--list-managers] [versions <package>]")
             print("run without arguments to open the terminal UI")
             raise SystemExit(0)
     if not sys.stdin.isatty() or not sys.stdout.isatty():

@@ -1,6 +1,6 @@
 pkgbase = pacmangr
-	pkgdesc = Animated terminal package manager for mixed Linux systems
-	pkgver = 0.1.3
+	pkgdesc = Animated TUI wrapper for native package managers
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/HeiDumb/pacmangr
 	arch = any
@@ -10,6 +10,7 @@ pkgbase = pacmangr
 	optdepends = yay: AUR package support
 	optdepends = paru: alternate AUR package support
 	optdepends = pacseek: interactive Arch package lookup
+	optdepends = downgrade: Arch package version history and downgrade support
 	optdepends = flatpak: Flatpak application support
 	optdepends = apt: Debian/Ubuntu package support
 	optdepends = snapd: Snap package support
@@ -21,7 +22,7 @@ pkgbase = pacmangr
 	optdepends = luarocks: Lua package support
 	source = pacmangr
 	source = LICENSE
-	sha256sums = 40123ba8623f4721d2f47c7dda6b337046e70003d3b45129a44972f25ae766af
+	sha256sums = c56682851c8cd4b1f763dba74f4be2d3c0e7eb61304f2533a078b17b0419030f
 	sha256sums = 1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c
 
 pkgname = pacmangr

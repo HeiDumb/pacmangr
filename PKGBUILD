@@ -1,8 +1,8 @@
 # Maintainer: HeiDumb <rockygehlot31@gmail.com>
 pkgname=pacmangr
-pkgver=0.1.3
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="Animated terminal package manager for mixed Linux systems"
+pkgdesc="Animated TUI wrapper for native package managers"
 arch=('any')
 url="https://github.com/HeiDumb/pacmangr"
 license=('MIT')
@@ -12,6 +12,7 @@ optdepends=(
   'yay: AUR package support'
   'paru: alternate AUR package support'
   'pacseek: interactive Arch package lookup'
+  'downgrade: Arch package version history and downgrade support'
   'flatpak: Flatpak application support'
   'apt: Debian/Ubuntu package support'
   'snapd: Snap package support'
@@ -24,7 +25,7 @@ optdepends=(
 )
 source=('pacmangr' 'LICENSE')
 sha256sums=(
-  '40123ba8623f4721d2f47c7dda6b337046e70003d3b45129a44972f25ae766af'
+  'c56682851c8cd4b1f763dba74f4be2d3c0e7eb61304f2533a078b17b0419030f'
   '1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c'
 )
 

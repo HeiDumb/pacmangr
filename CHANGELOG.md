@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0
+
+- Added a local SQLite cache at `~/.cache/pacmangr/pacmangr.sqlite` for search
+  results, installed-package inventory, and version lists.
+- Load cached installed packages at startup, then refresh the live manager data
+  in the background.
+- Show cached search results immediately for repeated queries while native
+  manager searches refresh.
+- Added `V` in the TUI and `pacmangr versions <package>` for package version
+  listing.
+- Fixed background `yay`/`paru` sudo handling by passing helper sudo flags and
+  feeding the in-TUI password through stdin.
+- Cleaned the package grid so rows show package names only while versions,
+  descriptions, state, and actions stay inside the dossier panel.
+- Rank and de-duplicate cached and live results so exact and installed matches
+  stay near the top.
+- Clarified the project docs: `pacmangr` is a TUI wrapper over native package
+  managers, not a replacement for them.
+
 ## 0.1.3
 
 - Moved the download monitor into a bottom package-view band so it is visible

@@ -1,20 +1,32 @@
 # pacmangr
 
-`pacmangr` is an animated terminal package manager for mixed Linux systems. It
-autodetects installed package managers, shows a unified searchable package view,
+`pacmangr` is an animated TUI wrapper for the package managers already installed
+on your system. It is not a replacement for `pacman`, `yay`, `paru`, `flatpak`,
+`apt`, or any other native manager; it gives those tools one fast searchable
+terminal interface and still delegates real install, remove, update, and info
+actions to the native commands underneath.
+
+It autodetects available managers, keeps a local SQLite cache for fast repeat
+searches and installed-package startup, shows a unified searchable package view,
 and runs install, remove, and update actions in a background queue with an
 in-TUI sudo password prompt and download monitor.
 
 ## Features
 
 - ASCII/curses TUI with search, installed packages, package details, and logs.
-- Unified search across all detected managers that expose search output.
+- Unified search across all detected managers that expose search output, with
+  cached results shown immediately while live manager commands refresh.
+- Local SQLite database at `~/.cache/pacmangr/pacmangr.sqlite` for search and
+  installed-package caches, plus cached version lists.
+- Version list lookup with `V` in the TUI or `pacmangr versions <package>` from
+  a shell.
 - Persistent selected packages pinned above new search results.
 - Background install/remove/update queue with compact progress, speed, and ETA
   monitor.
 - Installed package inventory across distro managers, language package managers,
-  Flatpak, and local AppImages.
-- Native install/remove/update execution without leaving the TUI.
+  Flatpak, and local AppImages, loaded from cache first and refreshed live.
+- Native install/remove/update execution through the real package managers
+  without leaving the TUI.
 - Default-yes confirmations: pressing Enter on `Y/n` prompts accepts the action.
 - No Python dependencies outside the standard library.
 - Non-interactive checks for packaging: `--version` and `--list-managers`.
@@ -62,6 +74,7 @@ Keys:
 - `x`: remove focused installed package or selected packages in the background
 - `u`: run update commands for detected managers in the background
 - `v`: show package info in the log
+- `V`: show cached/available versions for the focused package
 - `r`: refresh current section
 - `l`: log view
 - `?`: help
@@ -72,6 +85,7 @@ Non-interactive commands:
 ```sh
 pacmangr --version
 pacmangr --list-managers
+pacmangr versions hyprland
 ```
 
 ## Install From Source
