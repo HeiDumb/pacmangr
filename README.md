@@ -1,3 +1,6 @@
+https://github.com/user-attachments/assets/230ade11-2b1d-4f66-9d81-694cfdd2f907
+
+
 # pacmangr
 
 `pacmangr` is an animated TUI wrapper for the package managers already installed
@@ -142,5 +145,3 @@ make check
 The check target compiles the Python script and verifies the non-interactive
 entrypoints.
 
-
-https://github.com/user-attachments/assets/230ade11-2b1d-4f66-9d81-694cfdd2f907
