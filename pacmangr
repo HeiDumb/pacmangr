@@ -943,6 +943,88 @@ def pacman_log_versions(package: str) -> list[PackageVersion]:
     return versions
 
 
+def downgrade_remote_versions(tools: Tools, package: str) -> list[PackageVersion]:
+    if not tools.downgrade:
+        return []
+
+    base = [tools.downgrade]
+    if tools.sudo:
+        # Use an already-unlocked sudo timestamp. Do not prompt inside capture.
+        base = [tools.sudo, "-n", tools.downgrade]
+
+    commands = [
+        [*base, "--ala-only", "--latest", "200", package],
+        [*base, "--latest", "200", package],
+        [*base, package],
+    ]
+
+    versions: list[PackageVersion] = []
+    arch = pacman_architecture()
+
+    for cmd in commands:
+        code, output = run_capture(cmd, timeout=12)
+
+        # downgrade may wait for interactive selection. run_capture returns timeout output,
+        # and that output can still contain the version list, so parse code 124 too.
+        if code not in (0, 1, 124):
+            continue
+
+        for raw in output.splitlines():
+            line = strip_ansi(raw).strip()
+            if not line:
+                continue
+
+            lowered = line.lower()
+            if any(skip in lowered for skip in (
+                "select a package",
+                "warning:",
+                "loading",
+                "available packages",
+                "add packages",
+                "there is nothing",
+                "unable to",
+                "error:",
+            )):
+                continue
+
+            # Remove common menu prefixes: "1)", "1.", "[1]"
+            line = re.sub(r"^\s*(?:\[\d+\]|\d+\)|\d+\.)\s*", "", line)
+
+            found = ""
+
+            # Case: /path/hyprland-0.55.3-1-x86_64.pkg.tar.zst
+            for token in re.split(r"\s+", line):
+                cleaned = token.strip("[](){}<>,;:")
+                if package in cleaned and ".pkg" in cleaned:
+                    parsed = parse_package_file_version(package, Path(cleaned), arch)
+                    if parsed:
+                        found = parsed
+                        break
+
+            # Case: hyprland-0.55.3-1-x86_64 or hyprland-0.55.3-1-any
+            if not found:
+                pattern = re.compile(
+                    rf"{re.escape(package)}-([0-9][A-Za-z0-9_.:+~\-]*?)(?:-(?:{re.escape(arch)}|x86_64|aarch64|armv7h|i686|any))?(?:\s|$|\)|\])"
+                )
+                match = pattern.search(line)
+                if match:
+                    found = match.group(1).strip()
+
+            # Case: "0.55.3-1 remote" after menu number was stripped
+            if not found:
+                parts = line.split()
+                if parts and re.match(r"^[0-9][A-Za-z0-9_.:+~\-]*$", parts[0]):
+                    found = parts[0].strip()
+
+            if found:
+                versions.append(PackageVersion(package, found, "downgrade", "ALA remote"))
+
+        if versions:
+            break
+
+    return versions
+
+
 def arch_versions_for(tools: Tools, item: PackageItem) -> list[PackageVersion]:
     package = item.package_id
     versions: list[PackageVersion] = []
@@ -976,6 +1058,7 @@ def arch_versions_for(tools: Tools, item: PackageItem) -> list[PackageVersion]:
         if version:
             versions.append(PackageVersion(package, version, "downgrade", "local cache", str(path)))
     versions.extend(pacman_log_versions(package))
+    versions.extend(downgrade_remote_versions(tools, package))
     return dedupe_versions(versions)
 
 
@@ -2735,7 +2818,7 @@ class PkgUI:
         if ch == -1:
             return
 
-        if self.version_shelf_open and self.version_focus:
+        if self.version_shelf_open:
             if ch == ord("q"):
                 self.version_shelf_open = False
                 self.version_focus = False
@@ -2857,18 +2940,28 @@ class PkgUI:
 
     def move_version_selection(self, delta: int) -> None:
         if not self.version_rows:
+            self.status = "No versions loaded yet."
             return
-        max_index = max(0, len(self.version_rows) - 1)
-        self.version_cursor = max(0, min(max_index, self.version_cursor + delta))
 
-        shelf_height = 5
+        viewport = 5
+        total = len(self.version_rows)
+
+        self.version_cursor = max(0, min(total - 1, self.version_cursor + delta))
+
+        # Scroll the 5-row window when cursor moves outside it.
         if self.version_cursor < self.version_scroll:
             self.version_scroll = self.version_cursor
-        elif self.version_cursor >= self.version_scroll + shelf_height:
-            self.version_scroll = self.version_cursor - shelf_height + 1
+        elif self.version_cursor >= self.version_scroll + viewport:
+            self.version_scroll = self.version_cursor - viewport + 1
+
+        max_scroll = max(0, total - viewport)
+        self.version_scroll = max(0, min(self.version_scroll, max_scroll))
 
         version = self.version_rows[self.version_cursor]
-        self.status = f"Selected version {version.version}."
+        self.status = (
+            f"Version {self.version_cursor + 1}/{total}: {version.version} "
+            f"(window {self.version_scroll + 1}-{min(self.version_scroll + viewport, total)})"
+        )
 
     def selected_version(self) -> PackageVersion | None:
         if not self.version_rows:
@@ -3124,39 +3217,53 @@ class PkgUI:
             self.draw_downloads(top + height, 0, monitor_h, w)
 
     def draw_version_shelf(self, y: int, x: int, width: int, bottom_y: int) -> int:
-        shelf_h = min(5, max(0, bottom_y - y - 1))
         total = len(self.version_rows)
+        viewport = 5
 
-        header = f"  ├─ versions {self.version_cursor + 1 if total else 0}/{total}"
+        # Header + 5 version rows + footer, unless terminal space is smaller.
+        max_rows = max(1, bottom_y - y - 2)
+        shelf_h = min(viewport, max_rows)
+
+        if total:
+            if self.version_cursor < self.version_scroll:
+                self.version_scroll = self.version_cursor
+            elif self.version_cursor >= self.version_scroll + shelf_h:
+                self.version_scroll = self.version_cursor - shelf_h + 1
+
+            max_scroll = max(0, total - shelf_h)
+            self.version_scroll = max(0, min(self.version_scroll, max_scroll))
+
+        start = self.version_scroll
+        end = min(start + shelf_h, total)
+
+        up = "^" if start > 0 else " "
+        down = "v" if end < total else " "
+        current = self.version_cursor + 1 if total else 0
+
+        header = f"  ├─ versions {current}/{total} {up}{down}"
         self.safe_addstr(y, x, clip(header, width), curses.color_pair(1) | curses.A_BOLD)
         y += 1
-
-        if shelf_h <= 0:
-            return y
 
         if not self.version_rows:
             msg = "  │  loading versions..." if self.busy_label.startswith("loading versions") else "  │  no versions found"
             self.safe_addstr(y, x, clip(msg, width), curses.A_DIM)
             y += 1
         else:
-            if self.version_cursor < self.version_scroll:
-                self.version_scroll = self.version_cursor
-            if self.version_cursor >= self.version_scroll + shelf_h:
-                self.version_scroll = self.version_cursor - shelf_h + 1
+            visible_versions = self.version_rows[start:end]
 
-            visible_versions = self.version_rows[self.version_scroll : self.version_scroll + shelf_h]
             for offset, version in enumerate(visible_versions):
-                version_index = self.version_scroll + offset
+                version_index = start + offset
                 focused = version_index == self.version_cursor
                 attr = curses.color_pair(2) if focused else curses.A_NORMAL
                 marker = ">" if focused else " "
                 state = "installed" if version.installed else (version.origin or version.manager or "remote")
+
                 line = f"  │  {marker} {version.version:<16} {state}"
                 self.safe_addstr(y, x, clip(line, width), attr)
                 y += 1
 
         if y < bottom_y:
-            footer = "  └─ Enter select | p pin | Esc close"
+            footer = "  └─ j/k scroll | Enter select | p pin | Esc/q close"
             self.safe_addstr(y, x, clip(footer, width), curses.A_DIM)
             y += 1
 
