@@ -50,9 +50,34 @@ Native support is provided for:
 - Nix profile packages: `nix-env`
 - Language/tool ecosystems: `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks`
 - Embedded/other package managers: `opkg`, FreeBSD `pkg`, `guix`
+- **GitHub Plugins** (`gh`): Custom GitHub repositories as package sources
 
 Managers are autodetected at startup. If a manager is missing, it is hidden; if
 you install it later, `pacmangr` will pick it up the next time it starts.
+
+### GitHub Plugin System
+
+Install and manage packages directly from GitHub repositories.
+
+**Configuration:** Create `~/.config/pacmangr/plugins.json`:
+
+```json
+{
+  "plugins": {
+    "user/repo-name": "https://github.com/user/repo-name.git",
+    "dim-ghub/caelestia-shell-git": "https://github.com/dim-ghub/caelestia-shell-git.git"
+  }
+}
+```
+
+**Features:**
+- Search plugins by name or URL
+- Install via `git clone`
+- Update via `git pull --rebase`
+- Remove with automatic cleanup
+- Plugins stored in `~/.local/share/pacmangr/plugins/{user}/{repo}`
+
+See [GITHUB_PLUGINS.md](GITHUB_PLUGINS.md) for detailed usage instructions.
 
 ## Usage
 

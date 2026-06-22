@@ -371,9 +371,6 @@ class PackageItem:
         return self.name
 
     def install_command(self, tools: Tools) -> list[str] | None:
-        if self.source == "gh":
-            # GitHub plugins are handled specially during installation
-            return None
         if self.source == "flatpak":
             if not tools.flatpak:
                 return None
@@ -402,9 +399,6 @@ class PackageItem:
         return None
 
     def remove_command(self, tools: Tools) -> list[str] | None:
-        if self.source == "gh":
-            # GitHub plugins are handled specially during removal
-            return None
         if self.source == "flatpak":
             if tools.flatpak:
                 return [tools.flatpak, "uninstall", self.package_id]
@@ -546,184 +540,6 @@ def version_from_dict(data: dict[str, object]) -> PackageVersion:
         location=str(data.get("location") or ""),
         installed=bool(data.get("installed")),
     )
-
-
-class GitHubPluginManager:
-    """Manages GitHub repository-based plugins/packages."""
-
-    def __init__(self) -> None:
-        self.config_path = Path.home() / ".config" / APP_NAME / "plugins.json"
-        self.plugins_dir = Path.home() / ".local" / "share" / APP_NAME / "plugins"
-        self.config: dict[str, dict[str, str]] = {}
-        self.load_config()
-
-    def load_config(self) -> None:
-        """Load plugin configuration from ~/.config/pacmangr/plugins.json."""
-        if not self.config_path.exists():
-            self.config = {}
-            return
-        try:
-            with open(self.config_path) as f:
-                data = json.load(f)
-                # Normalize the config structure
-                self.config = data.get("plugins", {}) if isinstance(data, dict) else {}
-        except (json.JSONDecodeError, IOError):
-            self.config = {}
-
-    def get_installed_plugins(self) -> dict[str, str]:
-        """Get all installed plugins and their locations."""
-        installed: dict[str, str] = {}
-        if self.plugins_dir.exists():
-            for user_dir in self.plugins_dir.iterdir():
-                if not user_dir.is_dir():
-                    continue
-                for repo_dir in user_dir.iterdir():
-                    if not repo_dir.is_dir() or not (repo_dir / ".git").exists():
-                        continue
-                    key = f"{user_dir.name}/{repo_dir.name}"
-                    installed[key] = str(repo_dir)
-        return installed
-
-    def search_plugins(self, query: str) -> list[PackageItem]:
-        """Search for plugins matching the query."""
-        items: list[PackageItem] = []
-        installed = self.get_installed_plugins()
-        query_lower = query.lower()
-
-        for key, repo_url in self.config.items():
-            # key format: "user/repo"
-            if query_lower in key.lower() or query_lower in repo_url.lower():
-                user, repo = key.split("/", 1) if "/" in key else (key, key)
-                is_installed = key in installed
-                items.append(
-                    PackageItem(
-                        source="gh",
-                        manager="gh",
-                        name=repo,
-                        package_id=key,
-                        repo=user,
-                        version="",
-                        description=f"GitHub repository: {repo_url}",
-                        installed=is_installed,
-                        origin=repo_url,
-                    )
-                )
-        return items
-
-    def get_plugins_for_installed(self) -> list[PackageItem]:
-        """Get list of installed plugins."""
-        items: list[PackageItem] = []
-        installed = self.get_installed_plugins()
-
-        for key, path in installed.items():
-            if "/" not in key:
-                continue
-            user, repo = key.split("/", 1)
-            # Try to get the URL from config or .git/config
-            url = self.config.get(key, "")
-            if not url:
-                # Try to read from .git/config
-                try:
-                    git_config = Path(path) / ".git" / "config"
-                    if git_config.exists():
-                        with open(git_config) as f:
-                            content = f.read()
-                            # Extract URL from .git/config
-                            for line in content.splitlines():
-                                if line.strip().startswith("url ="):
-                                    url = line.split("=", 1)[1].strip()
-                                    break
-                except IOError:
-                    pass
-
-            items.append(
-                PackageItem(
-                    source="gh",
-                    manager="gh",
-                    name=repo,
-                    package_id=key,
-                    repo=user,
-                    version="",
-                    description=f"GitHub repository: {url}",
-                    installed=True,
-                    origin=url,
-                )
-            )
-        return items
-
-    def install_plugin(self, package_id: str) -> tuple[int, str]:
-        """Clone/install a GitHub plugin.
-        
-        Args:
-            package_id: Format "user/repo" (corresponds to config key)
-        
-        Returns:
-            (exit_code, output_message)
-        """
-        if package_id not in self.config:
-            return 1, f"Plugin '{package_id}' not found in configuration"
-
-        repo_url = self.config[package_id]
-        user, repo = package_id.split("/", 1) if "/" in package_id else (package_id, package_id)
-
-        clone_dir = self.plugins_dir / user / repo
-        clone_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        if clone_dir.exists():
-            # Update existing clone
-            try:
-                result = subprocess.run(
-                    ["git", "-C", str(clone_dir), "pull", "--rebase"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                if result.returncode == 0:
-                    return 0, f"Updated {package_id}"
-                else:
-                    return result.returncode, f"Update failed: {result.stderr}"
-            except Exception as e:
-                return 1, f"Update error: {str(e)}"
-        else:
-            # Clone new repository
-            try:
-                result = subprocess.run(
-                    ["git", "clone", repo_url, str(clone_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.returncode == 0:
-                    return 0, f"Installed {package_id}"
-                else:
-                    return result.returncode, f"Install failed: {result.stderr}"
-            except Exception as e:
-                return 1, f"Install error: {str(e)}"
-
-    def remove_plugin(self, package_id: str) -> tuple[int, str]:
-        """Remove a GitHub plugin.
-        
-        Args:
-            package_id: Format "user/repo"
-        
-        Returns:
-            (exit_code, output_message)
-        """
-        user, repo = package_id.split("/", 1) if "/" in package_id else (package_id, package_id)
-        plugin_dir = self.plugins_dir / user / repo
-
-        if not plugin_dir.exists():
-            return 1, f"Plugin directory not found: {plugin_dir}"
-
-        try:
-            shutil.rmtree(plugin_dir)
-            # Clean up empty user directory
-            user_dir = self.plugins_dir / user
-            if user_dir.exists() and not any(user_dir.iterdir()):
-                user_dir.rmdir()
-            return 0, f"Removed {package_id}"
-        except Exception as e:
-            return 1, f"Remove error: {str(e)}"
 
 
 class PackageCache:
@@ -1795,13 +1611,6 @@ def appimage_roots() -> list[Path]:
     ]
 
 
-def get_github_plugin_manager() -> GitHubPluginManager:
-    """Get or create a singleton GitHubPluginManager instance."""
-    if not hasattr(get_github_plugin_manager, "_instance"):
-        get_github_plugin_manager._instance = GitHubPluginManager()  # type: ignore
-    return get_github_plugin_manager._instance  # type: ignore
-
-
 def find_appimages(query: str = "") -> list[PackageItem]:
     needle = query.lower().strip()
     seen: set[Path] = set()
@@ -1867,7 +1676,6 @@ class PkgUI:
         self.stdscr = stdscr
         self.tools = Tools.detect()
         self.cache = PackageCache()
-        self.gh_manager = get_github_plugin_manager()
         self.mode = "search"
         self.search_backend = "all"
         self.query = ""
@@ -2252,10 +2060,6 @@ class PkgUI:
                 self.cache.save_search(manager, query, parsed)
                 add_many(parsed)
 
-        if backend in ("all", "gh"):
-            parsed = self.gh_manager.search_plugins(query)
-            add_many(parsed)
-
         return self.rank_results(results, query)[:MAX_RESULTS]
 
     def refresh_installed(self, background: bool = False) -> None:
@@ -2312,9 +2116,6 @@ class PkgUI:
                     self.log(f"{manager} installed list exited {code}:\n{output.strip()}")
 
             items.extend(find_appimages())
-
-            # Add GitHub plugins
-            items.extend(self.gh_manager.get_plugins_for_installed())
 
             return sorted(items, key=lambda item: (item.source, item.name.lower()))
 
@@ -2853,38 +2654,13 @@ class PkgUI:
         if len(targets) == 1 and targets[0].source == "appimage":
             self.show_info()
             return
-        
-        # Separate GitHub plugins from other packages
-        gh_targets = [item for item in targets if item.source == "gh"]
-        other_targets = [item for item in targets if item.source != "gh"]
-        
-        # Handle GitHub plugins
-        if gh_targets:
-            gh_items_to_install = [item for item in gh_targets if not item.installed]
-            if gh_items_to_install:
-                if self.confirm(f"Install {self.package_summary(gh_items_to_install)}?"):
-                    for item in gh_items_to_install:
-                        code, msg = self.gh_manager.install_plugin(item.package_id)
-                        if code == 0:
-                            self.log(f"✓ {msg}")
-                        else:
-                            self.log(f"✗ {msg}")
-                    self.refresh_installed(background=False)
-                    self.status = "GitHub plugins installed."
-                    return
-        
-        # Handle other packages normally
-        if not other_targets:
-            self.status = "No package selected."
-            return
-        
-        already_installed = [item for item in other_targets if item.installed and item.source != "appimage"]
+        already_installed = [item for item in targets if item.installed and item.source != "appimage"]
         if already_installed and not self.confirm(
             f"{self.package_summary(already_installed)} already installed. Reinstall anyway?"
         ):
             self.status = "Install cancelled."
             return
-        pairs, skipped = self.package_command_pairs(other_targets, "install")
+        pairs, skipped = self.package_command_pairs(targets, "install")
         if skipped:
             self.log("Skipped install targets: " + self.package_summary(skipped))
         if not pairs:
@@ -2903,33 +2679,7 @@ class PkgUI:
         if not targets:
             self.status = "No installed package selected."
             return
-        
-        # Separate GitHub plugins from other packages
-        gh_targets = [item for item in targets if item.source == "gh" and item.installed]
-        other_targets = [item for item in targets if item.source != "gh"]
-        
-        # Handle GitHub plugins
-        if gh_targets:
-            if self.confirm(f"Remove {self.package_summary(gh_targets)}?"):
-                for item in gh_targets:
-                    code, msg = self.gh_manager.remove_plugin(item.package_id)
-                    if code == 0:
-                        self.log(f"✓ {msg}")
-                    else:
-                        self.log(f"✗ {msg}")
-                self.refresh_installed(background=False)
-                self.status = "GitHub plugins removed."
-                return
-            else:
-                self.status = "Remove cancelled."
-                return
-        
-        # Handle other packages normally
-        if not other_targets:
-            self.status = "No installed package selected."
-            return
-        
-        pairs, skipped = self.package_command_pairs(other_targets, "remove")
+        pairs, skipped = self.package_command_pairs(targets, "remove")
         if skipped:
             self.log("Skipped remove targets: " + self.package_summary(skipped))
         if not pairs:
@@ -3299,7 +3049,6 @@ class PkgUI:
             "aur": "aur",
             "apt": "apt",
             "snap": "snap",
-            "gh": "gh",
         }.get(source, source)
 
     def source_attr(self, source: str) -> int:
@@ -3316,7 +3065,6 @@ class PkgUI:
             "pip": curses.color_pair(1),
             "pipx": curses.color_pair(1),
             "brew": curses.color_pair(4),
-            "gh": curses.color_pair(2),
         }.get(source, curses.A_NORMAL)
 
     def source_summary(self, items: list[PackageItem]) -> str:
@@ -3334,7 +3082,6 @@ class PkgUI:
             "apt",
             "snap",
             "appimg",
-            "gh",
             "cargo",
             "npm",
             "pip",
