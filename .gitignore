@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-*.pkg.tar.*
-*.src.tar.*
-pkg/
-src/
-*.tar.gz
-*.tar.zst
