@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pacmangr: an animated terminal package manager for mixed Linux systems.
+pacmangr: a terminal package manager for mixed Linux systems.
 
 It autodetects package managers already present on the host, including distro
 managers, language package managers, Flatpak, and local AppImages. Search/list
@@ -12,6 +12,7 @@ package managers underneath.
 from __future__ import annotations
 
 import curses
+import concurrent.futures
 import json
 import os
 import pty
@@ -31,11 +32,23 @@ from typing import Callable
 
 
 APP_NAME = "pacmangr"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 SPINNER = "|/-\\"
-SIGNAL_FRAMES = ("--", "\\\\", "||", "//")
 MAX_RESULTS = 500
 APPIMAGE_SCAN_DEPTH = 4
+SEARCH_WORKERS = 8
+SEARCH_TIMEOUT_SECONDS = {
+    "pacman": 8,
+    "yay": 10,
+    "paru": 10,
+    "flatpak": 10,
+    "apt": 8,
+    "snap": 10,
+    "cargo": 8,
+    "npm": 8,
+    "pip": 8,
+    "pipx": 8,
+}
 CACHE_DB_PATH = Path.home() / ".cache" / APP_NAME / "pacmangr.sqlite"
 CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 CACHE_TTL_SECONDS = {
@@ -371,9 +384,6 @@ class PackageItem:
         return self.name
 
     def install_command(self, tools: Tools) -> list[str] | None:
-        if self.source == "gh":
-            # GitHub plugins are handled specially during installation
-            return None
         if self.source == "flatpak":
             if not tools.flatpak:
                 return None
@@ -402,9 +412,6 @@ class PackageItem:
         return None
 
     def remove_command(self, tools: Tools) -> list[str] | None:
-        if self.source == "gh":
-            # GitHub plugins are handled specially during removal
-            return None
         if self.source == "flatpak":
             if tools.flatpak:
                 return [tools.flatpak, "uninstall", self.package_id]
@@ -546,184 +553,6 @@ def version_from_dict(data: dict[str, object]) -> PackageVersion:
         location=str(data.get("location") or ""),
         installed=bool(data.get("installed")),
     )
-
-
-class GitHubPluginManager:
-    """Manages GitHub repository-based plugins/packages."""
-
-    def __init__(self) -> None:
-        self.config_path = Path.home() / ".config" / APP_NAME / "plugins.json"
-        self.plugins_dir = Path.home() / ".local" / "share" / APP_NAME / "plugins"
-        self.config: dict[str, dict[str, str]] = {}
-        self.load_config()
-
-    def load_config(self) -> None:
-        """Load plugin configuration from ~/.config/pacmangr/plugins.json."""
-        if not self.config_path.exists():
-            self.config = {}
-            return
-        try:
-            with open(self.config_path) as f:
-                data = json.load(f)
-                # Normalize the config structure
-                self.config = data.get("plugins", {}) if isinstance(data, dict) else {}
-        except (json.JSONDecodeError, IOError):
-            self.config = {}
-
-    def get_installed_plugins(self) -> dict[str, str]:
-        """Get all installed plugins and their locations."""
-        installed: dict[str, str] = {}
-        if self.plugins_dir.exists():
-            for user_dir in self.plugins_dir.iterdir():
-                if not user_dir.is_dir():
-                    continue
-                for repo_dir in user_dir.iterdir():
-                    if not repo_dir.is_dir() or not (repo_dir / ".git").exists():
-                        continue
-                    key = f"{user_dir.name}/{repo_dir.name}"
-                    installed[key] = str(repo_dir)
-        return installed
-
-    def search_plugins(self, query: str) -> list[PackageItem]:
-        """Search for plugins matching the query."""
-        items: list[PackageItem] = []
-        installed = self.get_installed_plugins()
-        query_lower = query.lower()
-
-        for key, repo_url in self.config.items():
-            # key format: "user/repo"
-            if query_lower in key.lower() or query_lower in repo_url.lower():
-                user, repo = key.split("/", 1) if "/" in key else (key, key)
-                is_installed = key in installed
-                items.append(
-                    PackageItem(
-                        source="gh",
-                        manager="gh",
-                        name=repo,
-                        package_id=key,
-                        repo=user,
-                        version="",
-                        description=f"GitHub repository: {repo_url}",
-                        installed=is_installed,
-                        origin=repo_url,
-                    )
-                )
-        return items
-
-    def get_plugins_for_installed(self) -> list[PackageItem]:
-        """Get list of installed plugins."""
-        items: list[PackageItem] = []
-        installed = self.get_installed_plugins()
-
-        for key, path in installed.items():
-            if "/" not in key:
-                continue
-            user, repo = key.split("/", 1)
-            # Try to get the URL from config or .git/config
-            url = self.config.get(key, "")
-            if not url:
-                # Try to read from .git/config
-                try:
-                    git_config = Path(path) / ".git" / "config"
-                    if git_config.exists():
-                        with open(git_config) as f:
-                            content = f.read()
-                            # Extract URL from .git/config
-                            for line in content.splitlines():
-                                if line.strip().startswith("url ="):
-                                    url = line.split("=", 1)[1].strip()
-                                    break
-                except IOError:
-                    pass
-
-            items.append(
-                PackageItem(
-                    source="gh",
-                    manager="gh",
-                    name=repo,
-                    package_id=key,
-                    repo=user,
-                    version="",
-                    description=f"GitHub repository: {url}",
-                    installed=True,
-                    origin=url,
-                )
-            )
-        return items
-
-    def install_plugin(self, package_id: str) -> tuple[int, str]:
-        """Clone/install a GitHub plugin.
-        
-        Args:
-            package_id: Format "user/repo" (corresponds to config key)
-        
-        Returns:
-            (exit_code, output_message)
-        """
-        if package_id not in self.config:
-            return 1, f"Plugin '{package_id}' not found in configuration"
-
-        repo_url = self.config[package_id]
-        user, repo = package_id.split("/", 1) if "/" in package_id else (package_id, package_id)
-
-        clone_dir = self.plugins_dir / user / repo
-        clone_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        if clone_dir.exists():
-            # Update existing clone
-            try:
-                result = subprocess.run(
-                    ["git", "-C", str(clone_dir), "pull", "--rebase"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                if result.returncode == 0:
-                    return 0, f"Updated {package_id}"
-                else:
-                    return result.returncode, f"Update failed: {result.stderr}"
-            except Exception as e:
-                return 1, f"Update error: {str(e)}"
-        else:
-            # Clone new repository
-            try:
-                result = subprocess.run(
-                    ["git", "clone", repo_url, str(clone_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.returncode == 0:
-                    return 0, f"Installed {package_id}"
-                else:
-                    return result.returncode, f"Install failed: {result.stderr}"
-            except Exception as e:
-                return 1, f"Install error: {str(e)}"
-
-    def remove_plugin(self, package_id: str) -> tuple[int, str]:
-        """Remove a GitHub plugin.
-        
-        Args:
-            package_id: Format "user/repo"
-        
-        Returns:
-            (exit_code, output_message)
-        """
-        user, repo = package_id.split("/", 1) if "/" in package_id else (package_id, package_id)
-        plugin_dir = self.plugins_dir / user / repo
-
-        if not plugin_dir.exists():
-            return 1, f"Plugin directory not found: {plugin_dir}"
-
-        try:
-            shutil.rmtree(plugin_dir)
-            # Clean up empty user directory
-            user_dir = self.plugins_dir / user
-            if user_dir.exists() and not any(user_dir.iterdir()):
-                user_dir.rmdir()
-            return 0, f"Removed {package_id}"
-        except Exception as e:
-            return 1, f"Remove error: {str(e)}"
 
 
 class PackageCache:
@@ -1795,13 +1624,6 @@ def appimage_roots() -> list[Path]:
     ]
 
 
-def get_github_plugin_manager() -> GitHubPluginManager:
-    """Get or create a singleton GitHubPluginManager instance."""
-    if not hasattr(get_github_plugin_manager, "_instance"):
-        get_github_plugin_manager._instance = GitHubPluginManager()  # type: ignore
-    return get_github_plugin_manager._instance  # type: ignore
-
-
 def find_appimages(query: str = "") -> list[PackageItem]:
     needle = query.lower().strip()
     seen: set[Path] = set()
@@ -1862,12 +1684,72 @@ def human_size(size: int) -> str:
         value /= 1024
 
 
+def collect_installed_packages(
+    tools: Tools,
+    log: Callable[[str], None] | None = None,
+) -> list[PackageItem]:
+    report = log or (lambda _message: None)
+    items: list[PackageItem] = []
+    if tools.pacman:
+        _, foreign_output = run_capture([tools.pacman, "-Qqm"], timeout=20)
+        foreign_names = {line.strip() for line in foreign_output.splitlines() if line.strip()}
+        code, output = run_capture([tools.pacman, "-Q"], timeout=30)
+        if code == 0:
+            items.extend(parse_pacman_installed(output, foreign_names))
+        else:
+            report(f"pacman installed list exited {code}:\n{output.strip()}")
+
+    if tools.flatpak:
+        code, output = run_capture([tools.flatpak, "list", "--app", "--json"], timeout=30)
+        if code == 0:
+            items.extend(parse_flatpak_installed(output))
+        else:
+            report(f"flatpak installed list exited {code}:\n{output.strip()}")
+
+    if tools.dpkg_query:
+        code, output = run_capture(
+            [
+                tools.dpkg_query,
+                "-W",
+                "-f=${binary:Package}\\t${Version}\\t${db:Status-Abbrev}\\t${binary:Summary}\\n",
+            ],
+            timeout=40,
+        )
+        if code == 0:
+            items.extend(parse_apt_installed(output))
+        else:
+            report(f"dpkg installed list exited {code}:\n{output.strip()}")
+
+    if tools.snap:
+        code, output = run_capture([tools.snap, "list"], timeout=30)
+        if code == 0:
+            items.extend(parse_snap_installed(output))
+        else:
+            report(f"snap installed list exited {code}:\n{output.strip()}")
+
+    for manager in tools.extra_managers:
+        spec = MANAGER_SPECS.get(manager, {})
+        if "installed" not in spec:
+            continue
+        cmd = manager_spec_command(manager, "installed", tools)
+        if not cmd:
+            continue
+        code, output = run_capture(cmd, timeout=45)
+        if code == 0:
+            items.extend(parse_manager_installed(manager, output))
+        else:
+            report(f"{manager} installed list exited {code}:\n{output.strip()}")
+
+    items.extend(find_appimages())
+    return sorted(items, key=lambda item: (item.source, item.name.lower()))
+
+
 class PkgUI:
-    def __init__(self, stdscr: "curses._CursesWindow") -> None:
+    def __init__(self, stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
         self.stdscr = stdscr
         self.tools = Tools.detect()
         self.cache = PackageCache()
-        self.gh_manager = get_github_plugin_manager()
+        self.initial_query = initial_query.strip()
         self.mode = "search"
         self.search_backend = "all"
         self.query = ""
@@ -1899,6 +1781,7 @@ class PkgUI:
         self.busy_label = ""
         self.spinner_index = 0
         self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
+        self.pending_search_query: str | None = None
         self.last_installed_load = 0.0
         self.running = True
 
@@ -1910,7 +1793,8 @@ class PkgUI:
         self.log(f"Detected tools: {self.tools.enabled_labels()}")
         self.cache.cleanup()
         self.load_cached_installed()
-        self.refresh_installed(background=True)
+        if self.initial_query:
+            self.start_search(self.initial_query)
 
     def set_cursor(self, visible: bool) -> None:
         try:
@@ -2048,6 +1932,10 @@ class PkgUI:
                     self.last_installed_load = time.time()
                     self.status = f"Loaded {len(self.installed_items)} installed packages."
                     self.log(self.status)
+                    pending_search = self.pending_search_query
+                    if pending_search:
+                        self.pending_search_query = None
+                        self.start_search(pending_search)
                 elif label.startswith("loading versions"):
                     versions = result if isinstance(result, list) else []
                     self.version_rows = versions  # type: ignore[assignment]
@@ -2075,6 +1963,9 @@ class PkgUI:
         if not query:
             self.status = "Search cancelled."
             return
+        self.start_search(query)
+
+    def start_search(self, query: str) -> None:
         self.query = query
         self.mode = "search"
         self.selected = 0
@@ -2085,6 +1976,14 @@ class PkgUI:
             self.refresh_marked_metadata(self.search_results)
             self.status = f"Loaded {len(self.search_results)} cached results; refreshing live."
             self.log(self.status)
+        elif self.busy and self.busy_label == "loading installed packages":
+            self.search_results = []
+
+        if self.busy and self.busy_label == "loading installed packages":
+            self.pending_search_query = query
+            self.status = f"Queued search for {query!r}; finishing startup package load."
+            self.log(self.status)
+            return
 
         def job() -> list[PackageItem]:
             return self.search_packages(query, "all")
@@ -2160,6 +2059,7 @@ class PkgUI:
         results: list[PackageItem] = []
         seen: set[tuple[str, str]] = set()
         per_manager_limit = 80 if backend == "all" else MAX_RESULTS
+        jobs: list[tuple[str, Callable[[], tuple[str, list[PackageItem], bool, str]]]] = []
 
         def add_many(items: list[PackageItem], limit: int = per_manager_limit) -> None:
             added = 0
@@ -2173,64 +2073,94 @@ class PkgUI:
                 results.append(item)
                 added += 1
 
+        def timeout_for(manager: str) -> int:
+            return SEARCH_TIMEOUT_SECONDS.get(manager, 10 if backend == "all" else 20)
+
+        def command_job(
+            manager: str,
+            label: str,
+            cmd: list[str],
+            parser: Callable[[str], list[PackageItem]],
+        ) -> Callable[[], tuple[str, list[PackageItem], bool, str]]:
+            def run() -> tuple[str, list[PackageItem], bool, str]:
+                code, output = run_capture(cmd, timeout=timeout_for(manager))
+                if code not in (0, 1):
+                    return manager, [], False, f"{label} exited {code}:\n{output.strip()}"
+                return manager, parser(output), True, ""
+
+            return run
+
         if backend in ("all", "pacman") and self.tools.pacman:
-            code, output = run_capture([self.tools.pacman, "-Ss", query])
-            if code not in (0, 1):
-                self.log(f"pacman search exited {code}:\n{output.strip()}")
-            parsed = parse_arch_search(output, "pacman", self.installed_names)
-            if code in (0, 1):
-                self.cache.save_search("pacman", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "pacman",
+                command_job(
+                    "pacman",
+                    "pacman search",
+                    [self.tools.pacman, "-Ss", query],
+                    lambda output: parse_arch_search(output, "pacman", self.installed_names),
+                ),
+            ))
 
         if backend in ("all", "yay") and self.tools.yay:
-            code, output = run_capture([self.tools.yay, "-Ssa", query])
-            if code not in (0, 1):
-                self.log(f"yay AUR search exited {code}:\n{output.strip()}")
-            parsed = parse_arch_search(output, "yay", self.installed_names, "aur")
-            if code in (0, 1):
-                self.cache.save_search("yay", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "yay",
+                command_job(
+                    "yay",
+                    "yay AUR search",
+                    [self.tools.yay, "-Ssa", query],
+                    lambda output: parse_arch_search(output, "yay", self.installed_names, "aur"),
+                ),
+            ))
 
         if backend in ("all", "paru") and self.tools.paru:
-            code, output = run_capture([self.tools.paru, "-Ssa", query])
-            if code not in (0, 1):
-                self.log(f"paru AUR search exited {code}:\n{output.strip()}")
-            parsed = parse_arch_search(output, "paru", self.installed_names, "aur")
-            if code in (0, 1):
-                self.cache.save_search("paru", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "paru",
+                command_job(
+                    "paru",
+                    "paru AUR search",
+                    [self.tools.paru, "-Ssa", query],
+                    lambda output: parse_arch_search(output, "paru", self.installed_names, "aur"),
+                ),
+            ))
 
         if backend in ("all", "flatpak") and self.tools.flatpak:
-            code, output = run_capture([self.tools.flatpak, "search", "--json", query], timeout=60)
-            if code not in (0, 1):
-                self.log(f"flatpak search exited {code}:\n{output.strip()}")
-            parsed = parse_flatpak_search(output, self.installed_flatpak_ids)
-            if code in (0, 1):
-                self.cache.save_search("flatpak", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "flatpak",
+                command_job(
+                    "flatpak",
+                    "flatpak search",
+                    [self.tools.flatpak, "search", "--json", query],
+                    lambda output: parse_flatpak_search(output, self.installed_flatpak_ids),
+                ),
+            ))
 
         if backend in ("all", "apt") and self.tools.apt_cache:
-            code, output = run_capture([self.tools.apt_cache, "search", query], timeout=40)
-            if code not in (0, 1):
-                self.log(f"apt-cache search exited {code}:\n{output.strip()}")
-            parsed = parse_apt_search(output, self.installed_apt_names)
-            if code in (0, 1):
-                self.cache.save_search("apt", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "apt",
+                command_job(
+                    "apt",
+                    "apt-cache search",
+                    [self.tools.apt_cache, "search", query],
+                    lambda output: parse_apt_search(output, self.installed_apt_names),
+                ),
+            ))
 
         if backend in ("all", "snap") and self.tools.snap:
-            code, output = run_capture([self.tools.snap, "find", query], timeout=40)
-            if code not in (0, 1):
-                self.log(f"snap find exited {code}:\n{output.strip()}")
-            parsed = parse_snap_search(output, self.installed_snap_names)
-            if code in (0, 1):
-                self.cache.save_search("snap", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "snap",
+                command_job(
+                    "snap",
+                    "snap find",
+                    [self.tools.snap, "find", query],
+                    lambda output: parse_snap_search(output, self.installed_snap_names),
+                ),
+            ))
 
         if backend in ("all", "appimage"):
-            parsed = find_appimages(query)
-            self.cache.save_search("appimage", query, parsed)
-            add_many(parsed)
+            jobs.append((
+                "appimage",
+                lambda: ("appimage", find_appimages(query), True, ""),
+            ))
 
         if backend == "all":
             for manager in self.tools.extra_managers:
@@ -2240,83 +2170,45 @@ class PkgUI:
                 cmd = manager_spec_command(manager, "search", self.tools, query=query)
                 if not cmd:
                     continue
-                code, output = run_capture(cmd, timeout=60)
-                if code not in (0, 1):
-                    self.log(f"{manager} search exited {code}:\n{output.strip()}")
-                    continue
-                parsed = parse_manager_search(
+                jobs.append((
                     manager,
-                    output,
-                    self.installed_extra_names.get(manager, set()),
-                )
-                self.cache.save_search(manager, query, parsed)
-                add_many(parsed)
+                    command_job(
+                        manager,
+                        f"{manager} search",
+                        cmd,
+                        lambda output, name=manager: parse_manager_search(
+                            name,
+                            output,
+                            self.installed_extra_names.get(name, set()),
+                        ),
+                    ),
+                ))
 
-        if backend in ("all", "gh"):
-            parsed = self.gh_manager.search_plugins(query)
-            add_many(parsed)
+        if jobs:
+            workers = max(1, min(SEARCH_WORKERS, len(jobs)))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_manager = {
+                    executor.submit(job): manager
+                    for manager, job in jobs
+                }
+                for future in concurrent.futures.as_completed(future_to_manager):
+                    manager = future_to_manager[future]
+                    try:
+                        cache_manager, parsed, cacheable, log_message = future.result()
+                    except Exception as exc:  # noqa: BLE001 - keep one bad backend from killing search.
+                        self.log(f"{manager} search failed: {exc}")
+                        continue
+                    if log_message:
+                        self.log(log_message)
+                    if cacheable:
+                        self.cache.save_search(cache_manager, query, parsed)
+                    add_many(parsed)
 
         return self.rank_results(results, query)[:MAX_RESULTS]
 
     def refresh_installed(self, background: bool = False) -> None:
         def job() -> list[PackageItem]:
-            items: list[PackageItem] = []
-            if self.tools.pacman:
-                _, foreign_output = run_capture([self.tools.pacman, "-Qqm"], timeout=20)
-                foreign_names = {line.strip() for line in foreign_output.splitlines() if line.strip()}
-                code, output = run_capture([self.tools.pacman, "-Q"], timeout=30)
-                if code == 0:
-                    items.extend(parse_pacman_installed(output, foreign_names))
-                else:
-                    self.log(f"pacman installed list exited {code}:\n{output.strip()}")
-
-            if self.tools.flatpak:
-                code, output = run_capture([self.tools.flatpak, "list", "--app", "--json"], timeout=30)
-                if code == 0:
-                    items.extend(parse_flatpak_installed(output))
-                else:
-                    self.log(f"flatpak installed list exited {code}:\n{output.strip()}")
-
-            if self.tools.dpkg_query:
-                code, output = run_capture(
-                    [
-                        self.tools.dpkg_query,
-                        "-W",
-                        "-f=${binary:Package}\\t${Version}\\t${db:Status-Abbrev}\\t${binary:Summary}\\n",
-                    ],
-                    timeout=40,
-                )
-                if code == 0:
-                    items.extend(parse_apt_installed(output))
-                else:
-                    self.log(f"dpkg installed list exited {code}:\n{output.strip()}")
-
-            if self.tools.snap:
-                code, output = run_capture([self.tools.snap, "list"], timeout=30)
-                if code == 0:
-                    items.extend(parse_snap_installed(output))
-                else:
-                    self.log(f"snap installed list exited {code}:\n{output.strip()}")
-
-            for manager in self.tools.extra_managers:
-                spec = MANAGER_SPECS.get(manager, {})
-                if "installed" not in spec:
-                    continue
-                cmd = manager_spec_command(manager, "installed", self.tools)
-                if not cmd:
-                    continue
-                code, output = run_capture(cmd, timeout=45)
-                if code == 0:
-                    items.extend(parse_manager_installed(manager, output))
-                else:
-                    self.log(f"{manager} installed list exited {code}:\n{output.strip()}")
-
-            items.extend(find_appimages())
-
-            # Add GitHub plugins
-            items.extend(self.gh_manager.get_plugins_for_installed())
-
-            return sorted(items, key=lambda item: (item.source, item.name.lower()))
+            return collect_installed_packages(self.tools, self.log)
 
         if background:
             self.spawn_job("loading installed packages", job)
@@ -2328,10 +2220,10 @@ class PkgUI:
 
     def current_items(self) -> list[PackageItem]:
         if self.mode == "search":
-            pinned = self.marked_items()
-            pinned_keys = {package_key(item) for item in pinned}
-            return pinned + [
-                item for item in self.search_results if package_key(item) not in pinned_keys
+            selected_items = self.marked_items()
+            selected_keys = {package_key(item) for item in selected_items}
+            return selected_items + [
+                item for item in self.search_results if package_key(item) not in selected_keys
             ]
         if self.mode == "installed":
             if not self.installed_filter:
@@ -2385,7 +2277,7 @@ class PkgUI:
             self.status = f"Unselected {item.title()}."
         else:
             self.marked[key] = item
-            self.status = f"Selected {item.title()}. {len(self.marked)} pinned."
+            self.status = f"Selected {item.title()}. {len(self.marked)} total."
 
     def mark_current_items(self) -> None:
         items = self.current_items()
@@ -2398,7 +2290,7 @@ class PkgUI:
             if key not in self.marked:
                 self.marked[key] = item
                 added += 1
-        self.status = f"Selected {added} shown packages. {len(self.marked)} pinned."
+        self.status = f"Selected {added} shown packages. {len(self.marked)} total."
 
     def clear_marked(self) -> None:
         count = len(self.marked)
@@ -2853,38 +2745,14 @@ class PkgUI:
         if len(targets) == 1 and targets[0].source == "appimage":
             self.show_info()
             return
-        
-        # Separate GitHub plugins from other packages
-        gh_targets = [item for item in targets if item.source == "gh"]
-        other_targets = [item for item in targets if item.source != "gh"]
-        
-        # Handle GitHub plugins
-        if gh_targets:
-            gh_items_to_install = [item for item in gh_targets if not item.installed]
-            if gh_items_to_install:
-                if self.confirm(f"Install {self.package_summary(gh_items_to_install)}?"):
-                    for item in gh_items_to_install:
-                        code, msg = self.gh_manager.install_plugin(item.package_id)
-                        if code == 0:
-                            self.log(f"✓ {msg}")
-                        else:
-                            self.log(f"✗ {msg}")
-                    self.refresh_installed(background=False)
-                    self.status = "GitHub plugins installed."
-                    return
-        
-        # Handle other packages normally
-        if not other_targets:
-            self.status = "No package selected."
-            return
-        
-        already_installed = [item for item in other_targets if item.installed and item.source != "appimage"]
+
+        already_installed = [item for item in targets if item.installed and item.source != "appimage"]
         if already_installed and not self.confirm(
             f"{self.package_summary(already_installed)} already installed. Reinstall anyway?"
         ):
             self.status = "Install cancelled."
             return
-        pairs, skipped = self.package_command_pairs(other_targets, "install")
+        pairs, skipped = self.package_command_pairs(targets, "install")
         if skipped:
             self.log("Skipped install targets: " + self.package_summary(skipped))
         if not pairs:
@@ -2903,33 +2771,8 @@ class PkgUI:
         if not targets:
             self.status = "No installed package selected."
             return
-        
-        # Separate GitHub plugins from other packages
-        gh_targets = [item for item in targets if item.source == "gh" and item.installed]
-        other_targets = [item for item in targets if item.source != "gh"]
-        
-        # Handle GitHub plugins
-        if gh_targets:
-            if self.confirm(f"Remove {self.package_summary(gh_targets)}?"):
-                for item in gh_targets:
-                    code, msg = self.gh_manager.remove_plugin(item.package_id)
-                    if code == 0:
-                        self.log(f"✓ {msg}")
-                    else:
-                        self.log(f"✗ {msg}")
-                self.refresh_installed(background=False)
-                self.status = "GitHub plugins removed."
-                return
-            else:
-                self.status = "Remove cancelled."
-                return
-        
-        # Handle other packages normally
-        if not other_targets:
-            self.status = "No installed package selected."
-            return
-        
-        pairs, skipped = self.package_command_pairs(other_targets, "remove")
+
+        pairs, skipped = self.package_command_pairs(targets, "remove")
         if skipped:
             self.log("Skipped remove targets: " + self.package_summary(skipped))
         if not pairs:
@@ -3132,7 +2975,7 @@ class PkgUI:
             self.mode = "search"
             self.selected = 0
             self.scroll = 0
-            self.status = "Search view. Press / to search."
+            self.search()
             return
         if ch == ord("i"):
             self.mode = "installed"
@@ -3276,15 +3119,6 @@ class PkgUI:
             return 0
         return min(7, max(5, available_height // 4))
 
-    def animated_rail(self, width: int) -> str:
-        width = max(8, width)
-        cells = ["-"] * width
-        head = self.spinner_index % width
-        cells[head] = ">"
-        cells[(head - 1) % width] = "="
-        cells[(head - 2) % width] = "="
-        return "".join(cells)
-
     def source_tag(self, source: str) -> str:
         return {
             "aur/local": "local",
@@ -3299,7 +3133,6 @@ class PkgUI:
             "aur": "aur",
             "apt": "apt",
             "snap": "snap",
-            "gh": "gh",
         }.get(source, source)
 
     def source_attr(self, source: str) -> int:
@@ -3316,7 +3149,6 @@ class PkgUI:
             "pip": curses.color_pair(1),
             "pipx": curses.color_pair(1),
             "brew": curses.color_pair(4),
-            "gh": curses.color_pair(2),
         }.get(source, curses.A_NORMAL)
 
     def source_summary(self, items: list[PackageItem]) -> str:
@@ -3334,7 +3166,6 @@ class PkgUI:
             "apt",
             "snap",
             "appimg",
-            "gh",
             "cargo",
             "npm",
             "pip",
@@ -3382,14 +3213,8 @@ class PkgUI:
 
     def draw_header(self, h: int, w: int) -> None:
         header_h = self.header_height(w)
-        self.draw_box(0, 0, header_h, w, " PACKAGE COMMAND DECK ", active=True)
-        rail_w = max(10, min(24, (w - 24) // 2))
-        left_rail = self.animated_rail(rail_w)
-        right_rail = left_rail[::-1].replace("<", ">")
-        signal = SIGNAL_FRAMES[self.spinner_index % len(SIGNAL_FRAMES)]
-        title = f"{left_rail} < {APP_NAME.upper()} > {right_rail}"
-        if w < 88:
-            title = f"< {APP_NAME.upper()} > {signal}"
+        self.draw_box(0, 0, header_h, w, " PACKAGE MANAGER ", active=True)
+        title = f"{APP_NAME} {VERSION}"
         self.safe_addstr(1, max(1, (w - len(title)) // 2), clip(title, w - 4), curses.color_pair(1) | curses.A_BOLD)
 
         tabs = [
@@ -3420,9 +3245,9 @@ class PkgUI:
         visible = items[self.scroll : self.scroll + rows_available]
 
         if self.mode == "search":
-            title = f" SEARCH GRID :: {len(items)} RESULTS "
+            title = f" SEARCH :: {len(items)} RESULTS "
         else:
-            title = f" INSTALLED VAULT :: {len(items)} SHOWN "
+            title = f" INSTALLED :: {len(items)} PACKAGES "
         self.draw_box(top, 0, height, list_w, title, active=True)
         inner_w = max(1, list_w - 2)
 
@@ -3523,7 +3348,7 @@ class PkgUI:
         return y
 
     def draw_detail(self, y: int, x: int, height: int, width: int) -> None:
-        self.draw_box(y, x, height, width, " PACKAGE DOSSIER ", active=False)
+        self.draw_box(y, x, height, width, " DETAILS ", active=False)
         inner_x = x + 1
         inner_y = y + 1
         inner_w = max(1, width - 2)
@@ -3578,7 +3403,7 @@ class PkgUI:
             self.safe_addstr(inner_y + offset, inner_x, clip(line, inner_w), attr)
 
     def draw_downloads(self, y: int, x: int, height: int, width: int) -> None:
-        self.draw_box(y, x, height, width, " DOWNLOAD MONITOR ", active=False)
+        self.draw_box(y, x, height, width, " OPERATIONS ", active=False)
         inner_x = x + 1
         inner_y = y + 1
         inner_w = max(1, width - 2)
@@ -3619,7 +3444,7 @@ class PkgUI:
     def draw_log(self, h: int, w: int) -> None:
         top = self.header_height(w)
         height = max(1, h - top - self.footer_height())
-        self.draw_box(top, 0, height, w, " EVENT LOG ", active=True)
+        self.draw_box(top, 0, height, w, " ACTIVITY ", active=True)
         rows_available = max(1, height - 3)
         self.ensure_visible(rows_available)
         total = len(self.log_lines)
@@ -3631,7 +3456,7 @@ class PkgUI:
 
     def draw_status(self, h: int, w: int) -> None:
         y = h - self.footer_height()
-        self.draw_box(y, 0, self.footer_height(), w, " COMMAND BUS ", active=False)
+        self.draw_box(y, 0, self.footer_height(), w, " STATUS ", active=False)
         status = self.status
         if self.busy:
             status = f"{SPINNER[self.spinner_index % len(SPINNER)]} {status}"
@@ -3685,8 +3510,81 @@ def pad(text: str, width: int) -> str:
     return clip(text, width - 1).ljust(max(0, width - 1))
 
 
-def main(stdscr: "curses._CursesWindow") -> None:
-    app = PkgUI(stdscr)
+def headless_ui() -> PkgUI:
+    """Build the search engine without initializing curses."""
+    app = PkgUI.__new__(PkgUI)
+    app.tools = Tools.detect()
+    app.cache = PackageCache()
+    app.marked = {}
+    app.log_lines = []
+    app.installed_items = []
+    app.installed_names = set()
+    app.installed_apt_names = set()
+    app.installed_flatpak_ids = set()
+    app.installed_snap_names = set()
+    app.installed_extra_names = {}
+    app.apply_installed_items(app.cache.load_installed())
+    return app
+
+
+def print_packages(items: list[PackageItem]) -> None:
+    for item in items:
+        state = "installed" if item.installed else "available"
+        fields = (item.source, item.package_id, item.version or "-", state, item.description)
+        print("\t".join(field.replace("\t", " ").replace("\n", " ") for field in fields))
+
+
+def print_cache_status(cache: PackageCache) -> None:
+    if not cache.path.exists():
+        print(f"path: {cache.path}")
+        print("state: empty")
+        return
+    print(f"path: {cache.path}")
+    print(f"size: {cache.path.stat().st_size} bytes")
+    try:
+        with cache.connect() as conn:
+            for table in ("search_cache", "installed_packages", "version_cache"):
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                print(f"{table}: {count}")
+    except sqlite3.Error as exc:
+        print(f"state: unreadable ({exc})")
+
+
+def clear_cache(cache: PackageCache) -> None:
+    removed = False
+    for path in (cache.path, Path(f"{cache.path}-wal"), Path(f"{cache.path}-shm")):
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+    print("cache cleared" if removed else "cache already empty")
+
+
+def usage() -> str:
+    return "\n".join(
+        (
+            f"{APP_NAME} {VERSION}",
+            "usage: pacmangr [command]",
+            "",
+            "commands:",
+            "  search <query>       open the TUI and run a search",
+            "  find <query>         print unified search results",
+            "  installed [filter]   print installed packages",
+            "  info <package>       print native package information",
+            "  versions <package>   print available package versions",
+            "  managers             print detected package managers",
+            "  cache status|clear   inspect or clear the local cache",
+            "  doctor               check manager and cache availability",
+            "  --version            print the version",
+            "",
+            "Run without a command to open the TUI.",
+        )
+    )
+
+
+def main(stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
+    app = PkgUI(stdscr, initial_query)
     app.run()
 
 
@@ -3695,10 +3593,47 @@ if __name__ == "__main__":
         if sys.argv[1] in {"-V", "--version"}:
             print(f"{APP_NAME} {VERSION}")
             raise SystemExit(0)
-        if sys.argv[1] == "--list-managers":
+        if sys.argv[1] in {"--list-managers", "managers"}:
             tools = Tools.detect()
             print(tools.enabled_labels())
             raise SystemExit(0)
+        if sys.argv[1] == "find":
+            if len(sys.argv) < 3:
+                print("usage: pacmangr find <query>", file=sys.stderr)
+                raise SystemExit(2)
+            app = headless_ui()
+            print_packages(app.search_packages(" ".join(sys.argv[2:]), "all"))
+            raise SystemExit(0)
+        if sys.argv[1] == "installed":
+            needle = " ".join(sys.argv[2:]).strip().lower()
+            cache = PackageCache()
+            items = collect_installed_packages(Tools.detect())
+            cache.save_installed(items)
+            if needle:
+                items = [
+                    item for item in items
+                    if needle in item.name.lower() or needle in item.package_id.lower()
+                ]
+            print_packages(items)
+            raise SystemExit(0)
+        if sys.argv[1] == "info":
+            if len(sys.argv) != 3:
+                print("usage: pacmangr info <package>", file=sys.stderr)
+                raise SystemExit(2)
+            package = sys.argv[2]
+            tools = Tools.detect()
+            installed = next(
+                (item for item in PackageCache().load_installed() if item.package_id == package),
+                None,
+            )
+            item = installed or PackageItem("pacman", "pacman", package, package)
+            command = item.info_command(tools, installed_view=installed is not None)
+            if not command:
+                print(f"no information command is available for {package}", file=sys.stderr)
+                raise SystemExit(1)
+            code, output = run_capture(command, timeout=30)
+            print(output.rstrip())
+            raise SystemExit(code)
         if sys.argv[1] == "versions":
             if len(sys.argv) < 3:
                 print("usage: pacmangr versions <package>", file=sys.stderr)
@@ -3714,11 +3649,37 @@ if __name__ == "__main__":
                 versions = cache.load_versions("downgrade", package)
             print(format_versions(package, versions))
             raise SystemExit(0)
-        if sys.argv[1] in {"-h", "--help"}:
-            print(f"{APP_NAME} {VERSION}")
-            print("usage: pacmangr [--version] [--list-managers] [versions <package>]")
-            print("run without arguments to open the terminal UI")
+        if sys.argv[1] == "search":
+            if len(sys.argv) < 3:
+                print("usage: pacmangr search <query>", file=sys.stderr)
+                raise SystemExit(2)
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
+                raise SystemExit(2)
+            curses.wrapper(main, " ".join(sys.argv[2:]))
             raise SystemExit(0)
+        if sys.argv[1] == "cache":
+            if len(sys.argv) != 3 or sys.argv[2] not in {"status", "clear"}:
+                print("usage: pacmangr cache status|clear", file=sys.stderr)
+                raise SystemExit(2)
+            cache = PackageCache()
+            if sys.argv[2] == "status":
+                print_cache_status(cache)
+            else:
+                clear_cache(cache)
+            raise SystemExit(0)
+        if sys.argv[1] == "doctor":
+            tools = Tools.detect()
+            print(f"managers: {tools.enabled_labels()}")
+            print(f"cache: {CACHE_DB_PATH}")
+            print(f"terminal: {'yes' if sys.stdin.isatty() and sys.stdout.isatty() else 'no'}")
+            raise SystemExit(0 if tools.enabled_labels() != "none" else 1)
+        if sys.argv[1] in {"-h", "--help"}:
+            print(usage())
+            raise SystemExit(0)
+        print(f"unknown command: {sys.argv[1]}", file=sys.stderr)
+        print("run 'pacmangr --help' for usage", file=sys.stderr)
+        raise SystemExit(2)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
         raise SystemExit(2)

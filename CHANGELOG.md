@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Made `s` open the search prompt directly instead of requiring a second key.
+- Added headless `find`, `installed`, `info`, `managers`, `cache`, and `doctor`
+  commands.
+- Removed the unrelated Git repository plugin layer and development-loop
+  artifacts.
+- Simplified labels and presentation throughout the TUI.
+- Added regression tests for search-key behavior and CLI help.
+
 ## 0.2.0
 
 - Added a local SQLite cache at `~/.cache/pacmangr/pacmangr.sqlite` for search
@@ -12,8 +22,8 @@
   listing.
 - Fixed background `yay`/`paru` sudo handling by passing helper sudo flags and
   feeding the in-TUI password through stdin.
-- Cleaned the package grid so rows show package names only while versions,
-  descriptions, state, and actions stay inside the dossier panel.
+- Cleaned the package list so rows show package names only while versions,
+  descriptions, state, and actions stay inside the details panel.
 - Rank and de-duplicate cached and live results so exact and installed matches
   stay near the top.
 - Clarified the project docs: `pacmangr` is a TUI wrapper over native package

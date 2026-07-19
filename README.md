@@ -1,9 +1,6 @@
-https://github.com/user-attachments/assets/230ade11-2b1d-4f66-9d81-694cfdd2f907
-
-
 # pacmangr
 
-`pacmangr` is an animated TUI wrapper for the package managers already installed
+`pacmangr` is a terminal interface for the package managers already installed
 on your system. It is not a replacement for `pacman`, `yay`, `paru`, `flatpak`,
 `apt`, or any other native manager; it gives those tools one fast searchable
 terminal interface and still delegates real install, remove, update, and info
@@ -23,7 +20,7 @@ in-TUI sudo password prompt and download monitor.
   installed-package caches, plus cached version lists.
 - Version list lookup with `V` in the TUI or `pacmangr versions <package>` from
   a shell.
-- Persistent selected packages pinned above new search results.
+- Persistent package selections across new search results.
 - Background install/remove/update queue with compact progress, speed, and ETA
   monitor.
 - Installed package inventory across distro managers, language package managers,
@@ -53,34 +50,9 @@ Native support is provided for:
 - Nix profile packages: `nix-env`
 - Language/tool ecosystems: `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks`
 - Embedded/other package managers: `opkg`, FreeBSD `pkg`, `guix`
-- **GitHub Plugins** (`gh`): Custom GitHub repositories as package sources
 
 Managers are autodetected at startup. If a manager is missing, it is hidden; if
 you install it later, `pacmangr` will pick it up the next time it starts.
-
-### GitHub Plugin System
-
-Install and manage packages directly from GitHub repositories.
-
-**Configuration:** Create `~/.config/pacmangr/plugins.json`:
-
-```json
-{
-  "plugins": {
-    "user/repo-name": "https://github.com/user/repo-name.git",
-    "dim-ghub/caelestia-shell-git": "https://github.com/dim-ghub/caelestia-shell-git.git"
-  }
-}
-```
-
-**Features:**
-- Search plugins by name or URL
-- Install via `git clone`
-- Update via `git pull --rebase`
-- Remove with automatic cleanup
-- Plugins stored in `~/.local/share/pacmangr/plugins/{user}/{repo}`
-
-See [GITHUB_PLUGINS.md](GITHUB_PLUGINS.md) for detailed usage instructions.
 
 ## Usage
 
@@ -97,7 +69,7 @@ Keys:
 - `a`: select all packages currently shown
 - `c`: clear selected packages
 - `i`: installed packages
-- `s`: search view
+- `s`: open package search
 - `Enter`: install focused package or selected packages in the background
 - `x`: remove focused installed package or selected packages in the background
 - `u`: run update commands for detected managers in the background
@@ -112,8 +84,13 @@ Non-interactive commands:
 
 ```sh
 pacmangr --version
-pacmangr --list-managers
+pacmangr managers
+pacmangr find hyprland
+pacmangr installed python
+pacmangr info pacman
 pacmangr versions hyprland
+pacmangr cache status
+pacmangr doctor
 ```
 
 ## Install From Source
@@ -142,6 +119,5 @@ sudo make uninstall
 make check
 ```
 
-The check target compiles the Python script and verifies the non-interactive
-entrypoints.
-
+The check target compiles the Python script, runs the unit tests, and verifies
+the non-interactive entrypoints.
