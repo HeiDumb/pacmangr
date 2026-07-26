@@ -3686,4 +3686,4 @@ if __name__ == "__main__":
             raise SystemExit(2)
         curses.wrapper(main)
     except KeyboardInterrupt:
-        print("\n You quit via Ctrl+C, That is a bad idea, use esc next time")
+        print("\n \033[31m You quit via Ctrl+C, That is a bad idea, use esc to quit next time \033[0m")
