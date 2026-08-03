@@ -3589,98 +3589,101 @@ def main(stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] in {"-V", "--version"}:
-            print(f"{APP_NAME} {VERSION}")
-            raise SystemExit(0)
-        if sys.argv[1] in {"--list-managers", "managers"}:
-            tools = Tools.detect()
-            print(tools.enabled_labels())
-            raise SystemExit(0)
-        if sys.argv[1] == "find":
-            if len(sys.argv) < 3:
-                print("usage: pacmangr find <query>", file=sys.stderr)
-                raise SystemExit(2)
-            app = headless_ui()
-            print_packages(app.search_packages(" ".join(sys.argv[2:]), "all"))
-            raise SystemExit(0)
-        if sys.argv[1] == "installed":
-            needle = " ".join(sys.argv[2:]).strip().lower()
-            cache = PackageCache()
-            items = collect_installed_packages(Tools.detect())
-            cache.save_installed(items)
-            if needle:
-                items = [
-                    item for item in items
-                    if needle in item.name.lower() or needle in item.package_id.lower()
-                ]
-            print_packages(items)
-            raise SystemExit(0)
-        if sys.argv[1] == "info":
-            if len(sys.argv) != 3:
-                print("usage: pacmangr info <package>", file=sys.stderr)
-                raise SystemExit(2)
-            package = sys.argv[2]
-            tools = Tools.detect()
-            installed = next(
-                (item for item in PackageCache().load_installed() if item.package_id == package),
-                None,
-            )
-            item = installed or PackageItem("pacman", "pacman", package, package)
-            command = item.info_command(tools, installed_view=installed is not None)
-            if not command:
-                print(f"no information command is available for {package}", file=sys.stderr)
-                raise SystemExit(1)
-            code, output = run_capture(command, timeout=30)
-            print(output.rstrip())
-            raise SystemExit(code)
-        if sys.argv[1] == "versions":
-            if len(sys.argv) < 3:
-                print("usage: pacmangr versions <package>", file=sys.stderr)
-                raise SystemExit(2)
-            package = sys.argv[2]
-            tools = Tools.detect()
-            cache = PackageCache()
-            item = PackageItem("pacman", "pacman", package, package)
-            versions = package_versions(tools, item)
-            if versions:
-                cache.save_versions("downgrade", package, versions)
-            else:
-                versions = cache.load_versions("downgrade", package)
-            print(format_versions(package, versions))
-            raise SystemExit(0)
-        if sys.argv[1] == "search":
-            if len(sys.argv) < 3:
-                print("usage: pacmangr search <query>", file=sys.stderr)
-                raise SystemExit(2)
-            if not sys.stdin.isatty() or not sys.stdout.isatty():
-                print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
-                raise SystemExit(2)
-            curses.wrapper(main, " ".join(sys.argv[2:]))
-            raise SystemExit(0)
-        if sys.argv[1] == "cache":
-            if len(sys.argv) != 3 or sys.argv[2] not in {"status", "clear"}:
-                print("usage: pacmangr cache status|clear", file=sys.stderr)
-                raise SystemExit(2)
-            cache = PackageCache()
-            if sys.argv[2] == "status":
-                print_cache_status(cache)
-            else:
-                clear_cache(cache)
-            raise SystemExit(0)
-        if sys.argv[1] == "doctor":
-            tools = Tools.detect()
-            print(f"managers: {tools.enabled_labels()}")
-            print(f"cache: {CACHE_DB_PATH}")
-            print(f"terminal: {'yes' if sys.stdin.isatty() and sys.stdout.isatty() else 'no'}")
-            raise SystemExit(0 if tools.enabled_labels() != "none" else 1)
-        if sys.argv[1] in {"-h", "--help"}:
-            print(usage())
-            raise SystemExit(0)
-        print(f"unknown command: {sys.argv[1]}", file=sys.stderr)
-        print("run 'pacmangr --help' for usage", file=sys.stderr)
-        raise SystemExit(2)
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
-        raise SystemExit(2)
-    curses.wrapper(main)
+    try:
+        if len(sys.argv) > 1:
+            if sys.argv[1] in {"-V", "--version"}:
+                print(f"{APP_NAME} {VERSION}")
+                raise SystemExit(0)
+            if sys.argv[1] in {"--list-managers", "managers"}:
+                tools = Tools.detect()
+                print(tools.enabled_labels())
+                raise SystemExit(0)
+            if sys.argv[1] == "find":
+                if len(sys.argv) < 3:
+                    print("usage: pacmangr find <query>", file=sys.stderr)
+                    raise SystemExit(2)
+                app = headless_ui()
+                print_packages(app.search_packages(" ".join(sys.argv[2:]), "all"))
+                raise SystemExit(0)
+            if sys.argv[1] == "installed":
+                needle = " ".join(sys.argv[2:]).strip().lower()
+                cache = PackageCache()
+                items = collect_installed_packages(Tools.detect())
+                cache.save_installed(items)
+                if needle:
+                    items = [
+                        item for item in items
+                        if needle in item.name.lower() or needle in item.package_id.lower()
+                    ]
+                print_packages(items)
+                raise SystemExit(0)
+            if sys.argv[1] == "info":
+                if len(sys.argv) != 3:
+                    print("usage: pacmangr info <package>", file=sys.stderr)
+                    raise SystemExit(2)
+                package = sys.argv[2]
+                tools = Tools.detect()
+                installed = next(
+                    (item for item in PackageCache().load_installed() if item.package_id == package),
+                    None,
+                )
+                item = installed or PackageItem("pacman", "pacman", package, package)
+                command = item.info_command(tools, installed_view=installed is not None)
+                if not command:
+                    print(f"no information command is available for {package}", file=sys.stderr)
+                    raise SystemExit(1)
+                code, output = run_capture(command, timeout=30)
+                print(output.rstrip())
+                raise SystemExit(code)
+            if sys.argv[1] == "versions":
+                if len(sys.argv) < 3:
+                    print("usage: pacmangr versions <package>", file=sys.stderr)
+                    raise SystemExit(2)
+                package = sys.argv[2]
+                tools = Tools.detect()
+                cache = PackageCache()
+                item = PackageItem("pacman", "pacman", package, package)
+                versions = package_versions(tools, item)
+                if versions:
+                    cache.save_versions("downgrade", package, versions)
+                else:
+                    versions = cache.load_versions("downgrade", package)
+                print(format_versions(package, versions))
+                raise SystemExit(0)
+            if sys.argv[1] == "search":
+                if len(sys.argv) < 3:
+                    print("usage: pacmangr search <query>", file=sys.stderr)
+                    raise SystemExit(2)
+                if not sys.stdin.isatty() or not sys.stdout.isatty():
+                    print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
+                    raise SystemExit(2)
+                curses.wrapper(main, " ".join(sys.argv[2:]))
+                raise SystemExit(0)
+            if sys.argv[1] == "cache":
+                if len(sys.argv) != 3 or sys.argv[2] not in {"status", "clear"}:
+                    print("usage: pacmangr cache status|clear", file=sys.stderr)
+                    raise SystemExit(2)
+                cache = PackageCache()
+                if sys.argv[2] == "status":
+                    print_cache_status(cache)
+                else:
+                    clear_cache(cache)
+                raise SystemExit(0)
+            if sys.argv[1] == "doctor":
+                tools = Tools.detect()
+                print(f"managers: {tools.enabled_labels()}")
+                print(f"cache: {CACHE_DB_PATH}")
+                print(f"terminal: {'yes' if sys.stdin.isatty() and sys.stdout.isatty() else 'no'}")
+                raise SystemExit(0 if tools.enabled_labels() != "none" else 1)
+            if sys.argv[1] in {"-h", "--help"}:
+                print(usage())
+                raise SystemExit(0)
+            print(f"unknown command: {sys.argv[1]}", file=sys.stderr)
+            print("run 'pacmangr --help' for usage", file=sys.stderr)
+            raise SystemExit(2)
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
+            raise SystemExit(2)
+        curses.wrapper(main)
+    except KeyboardInterrupt:
+        print("\n \033[31m You quit via Ctrl+C, That is a bad idea, use esc to quit next time \033[0m")
