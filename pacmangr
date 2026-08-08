@@ -88,8 +88,10 @@ PACMAN_INFO_RE = re.compile(r"^([^:]+)\s*:\s*(.*)$")
 NIX_ATTR_PREFIX_RE = re.compile(r"^(?:legacyPackages|packages)\.[^.]+\.")
 NIX_STORE_PREFIX_RE = re.compile(r"^[0-9a-z]{32}-")
 NIX_NAME_VERSION_RE = re.compile(r"^(.*?)-([0-9][A-Za-z0-9._+~-]*)$")
+NIX_STORE_PACKAGE_RE = re.compile(r"^(/nix/store/[0-9a-z]{32}-[^/]+)(?:/|$)")
 SUDO_PROMPT = "pacmangr-sudo:"
 NIX_FEATURE_ARGS = ("--extra-experimental-features", "nix-command flakes")
+NIX_READ_ONLY_SOURCES = frozenset({"nix-system", "nix-home-manager", "nix-profile-link"})
 
 
 MANAGER_SPECS: dict[str, dict[str, object]] = {
@@ -376,6 +378,126 @@ def split_nix_name_version(value: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
+def nix_store_package_path(value: str) -> str:
+    """Return the top-level Nix store package containing a linked binary."""
+    match = NIX_STORE_PACKAGE_RE.match(value)
+    return match.group(1) if match else ""
+
+
+def nix_profile_bin_roots(
+    home: Path | None = None,
+    username: str | None = None,
+) -> list[tuple[str, str, Path]]:
+    """Known activated Nix profile bin trees, ordered by ownership specificity."""
+    home = home or Path.home()
+    username = username or os.environ.get("USER") or home.name
+    state_home = Path(os.environ.get("XDG_STATE_HOME") or home / ".local" / "state")
+    current_profile = Path(os.environ.get("NIX_PROFILE") or home / ".nix-profile")
+    return [
+        ("nix-system", "NixOS system configuration", Path("/run/current-system/sw/bin")),
+        (
+            "nix-system",
+            "NixOS per-user configuration",
+            Path("/etc/profiles/per-user") / username / "bin",
+        ),
+        (
+            "nix-home-manager",
+            "Home Manager configuration",
+            state_home / "nix" / "profiles" / "home-manager" / "home-path" / "bin",
+        ),
+        (
+            "nix-home-manager",
+            "Home Manager configuration",
+            state_home / "home-manager" / "gcroots" / "current-home" / "home-path" / "bin",
+        ),
+        ("nix-profile-link", "current Nix user profile", current_profile / "bin"),
+        ("nix-profile-link", "XDG Nix user profile", state_home / "nix" / "profile" / "bin"),
+        (
+            "nix-profile-link",
+            "legacy Nix user profile",
+            Path("/nix/var/nix/profiles/per-user") / username / "profile" / "bin",
+        ),
+        (
+            "nix-profile-link",
+            "global Nix profile",
+            Path("/nix/var/nix/profiles/default/bin"),
+        ),
+    ]
+
+
+def scan_nix_profile_bins(
+    roots: list[tuple[str, str, Path]] | None = None,
+) -> list[PackageItem]:
+    """Inventory packages exposed through activated Nix profile symlinks."""
+    grouped: dict[tuple[str, str], tuple[str, Path, set[str]]] = {}
+    seen_roots: set[Path] = set()
+    for source, label, bin_dir in roots or nix_profile_bin_roots():
+        try:
+            resolved_root = bin_dir.resolve()
+        except OSError:
+            resolved_root = bin_dir
+        if resolved_root in seen_roots or not bin_dir.is_dir():
+            continue
+        seen_roots.add(resolved_root)
+        try:
+            entries = list(bin_dir.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                target = str(entry.resolve())
+            except OSError:
+                continue
+            store_path = nix_store_package_path(target)
+            if not store_path:
+                continue
+            key = (source, store_path)
+            if key not in grouped:
+                grouped[key] = (label, bin_dir, set())
+            grouped[key][2].add(entry.name)
+
+    items: list[PackageItem] = []
+    for (source, store_path), (label, bin_dir, commands) in grouped.items():
+        name, version = split_nix_name_version(store_path)
+        command_list = ", ".join(sorted(commands)[:5])
+        if len(commands) > 5:
+            command_list += f", +{len(commands) - 5} more"
+        items.append(
+            PackageItem(
+                source=source,
+                manager="nix",
+                repo=label,
+                name=name,
+                package_id=store_path,
+                version=version,
+                description=f"Read-only {label}; linked commands: {command_list}",
+                installed=True,
+                origin=str(bin_dir),
+            )
+        )
+    return sorted(items, key=lambda item: (item.source, item.name.lower(), item.version))
+
+
+def merge_nix_linked_items(
+    items: list[PackageItem],
+    linked_nix_items: list[PackageItem],
+) -> list[PackageItem]:
+    """Add linked inventories without duplicating the actionable user profile."""
+    actionable_nix_names = {
+        value.lower()
+        for item in items
+        if item.source in {"nix", "nix-env"}
+        for value in (item.name, item.package_id)
+        if value
+    }
+    return items + [
+        item
+        for item in linked_nix_items
+        if item.source != "nix-profile-link"
+        or item.name.lower() not in actionable_nix_names
+    ]
+
+
 @dataclass
 class Tools:
     pacman: str | None
@@ -466,6 +588,8 @@ class PackageItem:
             return None
         if self.source == "appimage":
             return None
+        if self.source in NIX_READ_ONLY_SOURCES:
+            return None
         if self.source == "nix":
             if self.installed and not self.origin:
                 # Profiles can contain store paths without a recorded flake.
@@ -501,6 +625,8 @@ class PackageItem:
         if self.source == "appimage":
             rm = shutil.which("rm") or "/usr/bin/rm"
             return [rm, "-v", self.package_id]
+        if self.source in NIX_READ_ONLY_SOURCES:
+            return None
         if self.source == "nix":
             # Modern profiles are removed by their profile element name (or by
             # the numeric index emitted by older manifest versions), not by a
@@ -533,6 +659,8 @@ class PackageItem:
                 return [tools.snap, "info", self.package_id]
             return None
         if self.source == "appimage":
+            return None
+        if self.source in NIX_READ_ONLY_SOURCES:
             return None
         if self.source == "nix" and (installed_view or self.installed):
             command = manager_spec_command("nix", "installed", tools)
@@ -1983,6 +2111,8 @@ def collect_installed_packages(
         else:
             report(f"{manager} installed list exited {code}:\n{output.strip()}")
 
+    items = merge_nix_linked_items(items, scan_nix_profile_bins())
+
     items.extend(find_appimages())
     return sorted(items, key=lambda item: (item.source, item.name.lower()))
 
@@ -2097,7 +2227,7 @@ class PkgUI:
             manager: {
                 value
                 for item in self.installed_items
-                if item.source == manager
+                if item.source == manager or item.manager == manager
                 for value in (item.package_id, item.name)
                 if value
             }

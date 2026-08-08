@@ -1,6 +1,7 @@
 import importlib.machinery
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -200,6 +201,88 @@ class NixBackendTests(unittest.TestCase):
         self.assertTrue(searched[0].installed)
         self.assertEqual(installed[0].package_id, "hello")
         self.assertEqual(installed[0].version, "2.12.2")
+
+    def test_profile_symlink_scan_groups_commands_and_marks_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            system_bin = Path(temporary) / "system" / "bin"
+            home_bin = Path(temporary) / "home-manager" / "bin"
+            system_bin.mkdir(parents=True)
+            home_bin.mkdir(parents=True)
+            ripgrep_store = "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-ripgrep-14.1.1"
+            hello_store = "/nix/store/1123456789abcdfghijklmnpqrsvwxyz-hello-2.12.2"
+            (system_bin / "rg").symlink_to(ripgrep_store + "/bin/rg")
+            (system_bin / "rgrep").symlink_to(ripgrep_store + "/bin/rgrep")
+            (home_bin / "hello").symlink_to(hello_store + "/bin/hello")
+
+            items = MODULE.scan_nix_profile_bins([
+                ("nix-system", "NixOS system configuration", system_bin),
+                ("nix-home-manager", "Home Manager configuration", home_bin),
+            ])
+
+        self.assertEqual(len(items), 2)
+        by_source = {item.source: item for item in items}
+        self.assertEqual(by_source["nix-system"].name, "ripgrep")
+        self.assertEqual(by_source["nix-system"].version, "14.1.1")
+        self.assertIn("rg, rgrep", by_source["nix-system"].description)
+        self.assertEqual(by_source["nix-home-manager"].name, "hello")
+        self.assertIn("Home Manager", by_source["nix-home-manager"].repo)
+
+    def test_declarative_nix_items_never_fall_back_to_mutating_commands(self):
+        tools = self.tools({"nix": "/usr/bin/nix"})
+        tools.pacman = "/usr/bin/pacman"
+        tools.sudo = "/usr/bin/sudo"
+        item = MODULE.PackageItem(
+            "nix-system",
+            "nix",
+            "ripgrep",
+            "/nix/store/hash-ripgrep-14.1.1",
+            installed=True,
+        )
+
+        self.assertIsNone(item.install_command(tools))
+        self.assertIsNone(item.remove_command(tools))
+        self.assertIsNone(item.info_command(tools, installed_view=True))
+
+    def test_actionable_profile_wins_over_duplicate_user_profile_link(self):
+        actionable = MODULE.PackageItem(
+            "nix", "nix", "hello", "hello", installed=True
+        )
+        linked_user = MODULE.PackageItem(
+            "nix-profile-link",
+            "nix",
+            "hello",
+            "/nix/store/hash-hello-2.12.2",
+            installed=True,
+        )
+        linked_system = MODULE.PackageItem(
+            "nix-system",
+            "nix",
+            "hello",
+            "/nix/store/hash-hello-2.12.2",
+            installed=True,
+        )
+
+        merged = MODULE.merge_nix_linked_items(
+            [actionable], [linked_user, linked_system]
+        )
+
+        self.assertEqual([item.source for item in merged], ["nix", "nix-system"])
+
+    def test_declarative_nix_names_mark_search_results_installed(self):
+        ui = MODULE.PkgUI.__new__(MODULE.PkgUI)
+        ui.tools = self.tools({"nix": "/usr/bin/nix"})
+        ui.refresh_marked_metadata = Mock()
+        item = MODULE.PackageItem(
+            "nix-home-manager",
+            "nix",
+            "hello",
+            "/nix/store/hash-hello-2.12.2",
+            installed=True,
+        )
+
+        ui.apply_installed_items([item])
+
+        self.assertIn("hello", ui.installed_extra_names["nix"])
 
 
 class OutputTests(unittest.TestCase):

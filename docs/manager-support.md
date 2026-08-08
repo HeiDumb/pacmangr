@@ -60,6 +60,23 @@ pacmangr falls back to its legacy query/install/remove/update commands.
 
 pacmangr never enables the modern and legacy adapters together: Nix documents
 their profile formats as incompatible after a modern profile has been created.
-The backend covers imperative user-profile packages only. Declarative NixOS
-`environment.systemPackages` and Home Manager packages remain owned by their
-configuration files and rebuild commands.
+
+The installed view additionally scans the activated `bin` symlinks beneath:
+
+- the current/XDG and legacy user profiles;
+- `/run/current-system/sw` and `/etc/profiles/per-user/<user>`;
+- standard Home Manager generation roots; and
+- the global Nix profile.
+
+Each linked binary is resolved to its top-level `/nix/store` package and
+multiple commands from one package are grouped into one row. The row identifies
+whether it came from NixOS, Home Manager, or another profile link. A package
+already returned by `nix profile list` is not duplicated by the user-profile
+symlink scan.
+
+Only `nix profile`/`nix-env` rows are actionable. Declarative NixOS packages,
+Home Manager packages, and other externally owned profile links are read-only;
+pacmangr will not edit configuration files or unlink their binaries. Remove
+those packages from `environment.systemPackages`,
+`users.users.<name>.packages`, or `home.packages`, then run the appropriate
+NixOS/Home Manager rebuild.

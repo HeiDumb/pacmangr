@@ -9,6 +9,10 @@
   expected by each Nix generation.
 - Documented the boundary between imperative user profiles and declarative
   NixOS/Home Manager package configuration.
+- Added read-only inventory for binaries linked from NixOS system, per-user,
+  Home Manager, current-user, legacy-user, and global Nix profile trees.
+- Prevented declarative or otherwise externally owned profile links from ever
+  falling through to an unrelated mutating package-manager command.
 
 ## 0.2.1
 
