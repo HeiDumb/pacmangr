@@ -43,3 +43,23 @@ the password.
 
 For managers whose CLI output is not stable JSON, parsing is conservative and
 best-effort. Failed manager commands are logged in the TUI log view.
+
+## Nix profiles
+
+When `nix` is available, pacmangr uses the modern user-profile workflow:
+
+- search: `nix search nixpkgs <query> --json`
+- installed packages: `nix profile list --json`
+- install/remove: `nix profile install` and `nix profile remove`
+- update: `nix profile upgrade '.*'`
+
+The adapter enables `nix-command flakes` per invocation, so users do not have
+to change `nix.conf` just to use pacmangr. Both current name-keyed profile JSON
+and the older list/index shape are accepted. If only `nix-env` is present,
+pacmangr falls back to its legacy query/install/remove/update commands.
+
+pacmangr never enables the modern and legacy adapters together: Nix documents
+their profile formats as incompatible after a modern profile has been created.
+The backend covers imperative user-profile packages only. Declarative NixOS
+`environment.systemPackages` and Home Manager packages remain owned by their
+configuration files and rebuild commands.
