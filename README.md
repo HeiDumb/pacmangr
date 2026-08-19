@@ -1,5 +1,7 @@
 # pacmangr
 
+![Pacmangr](showcase.gif)
+
 `pacmangr` is a terminal interface for the package managers already installed
 on your system. It is not a replacement for `pacman`, `yay`, `paru`, `flatpak`,
 `apt`, or any other native manager; it gives those tools one fast searchable
@@ -121,5 +123,3 @@ make check
 
 The check target compiles the Python script, runs the unit tests, and verifies
 the non-interactive entrypoints.
-
-https://www.image2url.com/r2/default/gifs/1787124976269-c965a4b0-e163-4817-ab55-f12eda31204e.gif
