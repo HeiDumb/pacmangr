@@ -121,3 +121,5 @@ make check
 
 The check target compiles the Python script, runs the unit tests, and verifies
 the non-interactive entrypoints.
+
+https://www.image2url.com/r2/default/gifs/1787124976269-c965a4b0-e163-4817-ab55-f12eda31204e.gif
