@@ -49,12 +49,22 @@ Native support is provided for:
 - Solus: `eopkg`
 - Clear Linux: `swupd`
 - Homebrew/Linuxbrew: `brew`
-- Nix profile packages: `nix-env`
+- Nix user profiles: modern `nix profile`/`nix search`, with `nix-env` fallback
 - Language/tool ecosystems: `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks`
 - Embedded/other package managers: `opkg`, FreeBSD `pkg`, `guix`
 
 Managers are autodetected at startup. If a manager is missing, it is hidden; if
 you install it later, `pacmangr` will pick it up the next time it starts.
+
+For Nix, pacmangr mutates only the current user's imperative profile. Modern
+Nix is preferred and invoked with `nix-command flakes` for JSON search/profile
+data; `nix-env` is used only when the modern `nix` command is unavailable,
+because the two profile formats cannot safely be mixed. Activated binaries are
+also discovered through the standard user, NixOS, and Home Manager profile
+symlink trees. Declarative and externally owned entries appear in the installed
+view with their owner, but are read-only: remove them from `home.packages`,
+`users.users.<name>.packages`, or `environment.systemPackages` and rebuild with
+the corresponding configuration tool.
 
 ## Usage
 
