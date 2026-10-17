@@ -2,152 +2,104 @@
 
 ![Pacmangr](showcase.gif)
 
-`pacmangr` is a terminal interface for the package managers already installed
-on your system. It is not a replacement for `pacman`, `yay`, `paru`, `flatpak`,
-`apt`, or any other native manager; it gives those tools one fast searchable
-terminal interface and still delegates real install, remove, update, and info
-actions to the native commands underneath.
+**One package-management front end for the package managers already on your
+computer.** Pacmangr is available as an interactive terminal UI, a GTK desktop
+application, and a scriptable command-line tool.
 
-It autodetects available managers, keeps a local SQLite cache for fast repeat
-searches and installed-package startup, shows a unified searchable package view,
-and runs install, remove, and update actions in a background queue with an
-in-TUI sudo password prompt and download monitor.
+It does not replace `pacman`, `apt`, `flatpak`, `yay`, `pip`, or another native
+tool. It discovers what is installed, gives those tools one searchable
+interface, and delegates every action back to the appropriate manager.
 
-For the local desktop, `pacmangr-gui` provides an organised GTK interface using
-the same search, cache, and package backend. It follows the current Heilios
-colour scheme, offers per-source search and installed-package filters, and runs
-package operations in the background. Privileged operations use a graphical
-polkit prompt instead of opening a terminal.
+## What it does
 
-## Features
+- Search packages across detected system, universal, language, and developer
+  package managers.
+- Browse installed packages, package metadata, and available versions.
+- Install, remove, and update through the native manager that owns a package.
+- Run as a keyboard-first curses TUI, a full GTK 4 desktop application, or a
+  non-interactive CLI for scripts.
+- Cache search results and installed-package data locally for a fast startup.
+- Show live operation progress, download speed, and ETA in the desktop app.
+- Use graphical polkit authentication for privileged GUI operations.
 
-- ASCII/curses TUI with search, installed packages, package details, and logs.
-- GTK GUI with source filters, installed view, package details and versions,
-  all-source updates, manager/cache diagnostics, graphical authentication, and
-  live percentage, speed, and ETA while package operations run.
-- Unified search across all detected managers that expose search output, with
-  cached results shown immediately while live manager commands refresh.
-- Local SQLite database at `~/.cache/pacmangr/pacmangr.sqlite` for search and
-  installed-package caches, plus cached version lists.
-- Version list lookup with `V` in the TUI or `pacmangr versions <package>` from
-  a shell.
-- Persistent package selections across new search results.
-- Background install/remove/update queue with compact progress, speed, and ETA
-  monitor.
-- Installed package inventory across distro managers, language package managers,
-  Flatpak, and local AppImages, loaded from cache first and refreshed live.
-- Native install/remove/update execution through the real package managers
-  without leaving the TUI.
-- Default-yes confirmations: pressing Enter on `Y/n` prompts accepts the action.
-- The terminal interface has no Python dependencies outside the standard
-  library. The optional desktop interface uses GTK 4 through PyGObject.
-- Non-interactive checks for packaging: `--version` and `--list-managers`.
+## Interfaces
 
-## Supported Managers
+| Interface | Command | Best for |
+| --- | --- | --- |
+| Terminal UI | `pacmangr` | Fast keyboard-driven package management in a terminal |
+| Desktop app | `pacmangr-gui` | Searching, reviewing details, and managing packages graphically |
+| Headless CLI | `pacmangr <command>` | Scripts, aliases, automation, and dry runs |
 
-Native support is provided for:
+## Requirements
 
-- Arch: `pacman`, `yay`, `paru`, `pacseek`
-- Universal app formats: `flatpak`, local `.AppImage` files
-- Git repositories: managed fetch/update checkouts under `~/.local/src/pacmangr`
-- Debian/Ubuntu: `apt`, `apt-cache`, `dpkg-query`
-- Snap: `snap`
-- Fedora/RHEL: `dnf`
-- openSUSE: `zypper`
-- Alpine: `apk`
-- Void: `xbps-query`, `xbps-install`, `xbps-remove`
-- Gentoo: `emerge`
-- Solus: `eopkg`
-- Clear Linux: `swupd`
-- Homebrew/Linuxbrew: `brew`
-- Nix profile packages: `nix-env`
-- Language/tool ecosystems: `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks`
-- Embedded/other package managers: `opkg`, FreeBSD `pkg`, `guix`
+### Core terminal interface
 
-Managers are autodetected at startup. If a manager is missing, it is hidden; if
-you install it later, `pacmangr` will pick it up the next time it starts.
+- Linux or another supported Unix-like host
+- Python **3.10 or newer**
+- At least one package manager you want Pacmangr to use
+- A terminal with curses support for the interactive TUI
 
-## Usage
+The terminal command uses only the Python standard library.
 
-Run:
+### Desktop application
+
+The GTK app additionally needs:
+
+- GTK 4
+- PyGObject with GTK 4 bindings
+- A running graphical session
+- Polkit (`pkexec`) and a desktop polkit agent for system-level install,
+  removal, and update actions
+
+On Arch Linux, install the runtime requirements with:
 
 ```sh
-pacmangr
-pacmangr-gui
+sudo pacman -S python python-gobject gtk4 polkit
 ```
 
-Keys:
+The included Arch package declares the GUI dependencies automatically. Package
+names differ on other distributions; install their Python 3, GTK 4, PyGObject,
+and polkit equivalents.
 
-- `/`: search packages, or filter installed packages in the installed view
-- `Space`: select or unselect the focused package
-- `a`: select all packages currently shown
-- `c`: clear selected packages
-- `i`: installed packages
-- `s`: open package search
-- `Enter`: install focused package or selected packages in the background
-- `x`: remove focused installed package or selected packages in the background
-- `u`: run update commands for detected managers in the background
-- `v`: show package info in the log
-- `V`: show cached/available versions for the focused package
-- `r`: refresh current section
-- `l`: log view
-- `?`: help
-- `q`: quit
+### Supported backends
 
-Non-interactive commands:
+Pacmangr only shows a backend after its executable is detected.
+
+| Category | Backends |
+| --- | --- |
+| Arch | `pacman`, `yay`, `paru`, `pacseek`, `downgrade` |
+| Debian/Ubuntu | `apt`, `apt-cache`, `dpkg-query` |
+| Fedora/RHEL | `dnf` |
+| openSUSE | `zypper` |
+| Alpine / Void / Gentoo / Solus / Clear Linux | `apk`, `xbps`, `emerge`, `eopkg`, `swupd` |
+| Universal apps | `flatpak`, local AppImages |
+| Developer tools | `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks` |
+| Other environments | `brew`, `nix-env`, `opkg`, FreeBSD `pkg`, `guix` |
+| Source repositories | Git URLs, managed under `~/.local/src/pacmangr` |
+
+## Installation
+
+Pacmangr installs like a normal desktop application: the GUI launcher and its
+icon are added to the standard application and icon directories. It is not
+distributed as a Flatpak because a sandboxed app cannot safely operate the
+host's package managers, package databases, and polkit services.
+
+### Arch Linux package
+
+Build and install the included package:
 
 ```sh
-pacmangr --version
-pacmangr managers
-pacmangr find hyprland
-pacmangr install firefox --source pacman
-pacmangr install org.mozilla.firefox --source flatpak -y
-pacmangr install https://github.com/owner/project.git --source git
-pacmangr install requests --source pip --scope venv
-pacmangr remove firefox --dry-run
-pacmangr update --dry-run
-pacmangr update flatpak -y
-pacmangr installed python
-pacmangr info pacman
-pacmangr versions hyprland
-pacmangr cache status
-pacmangr doctor
+git clone https://github.com/HeiDumb/pacmangr.git
+cd pacmangr
+makepkg -si
 ```
 
-`--source` selects a native manager such as `pacman`, `yay`, `flatpak`, `nix`,
-or another detected backend. `--dry-run` prints the exact native command and
-`-y`/`--yes` adds that manager's non-interactive confirmation option. Nix
-operations affect only the detected imperative profile; Pacmangr never edits
-NixOS or Home Manager declarations automatically.
-
-Git URLs are fetched into Pacmangr's managed source directory and can be
-fast-forward updated later; repository build scripts are never executed
-automatically. Pip installs ask for an isolated venv (recommended), user scope,
-or explicit privileged system scope. CLI users choose the same behavior with
-`--scope venv|user|system`.
-
-## Install
-
-The desktop app installs as **pacmangr** in your application launcher, with the
-included icon and a standard desktop entry. It is intentionally not distributed
-as a Flatpak: Pacmangr needs access to the host's package managers, their
-databases, and polkit, which a normal Flatpak sandbox cannot safely provide.
-
-### Requirements
-
-- Python 3
-- GTK 4 and PyGObject (`gtk4` and `python-gobject` on Arch)
-- Polkit for graphical authentication when managing system packages
-
-The terminal-only `pacmangr` command only needs Python 3. Native package
-managers such as `pacman`, `flatpak`, or `apt` remain optional and are detected
-automatically.
+This installs `pacmangr`, `pacmangr-gui`, the desktop entry, and the Pacmangr
+icon.
 
 ### Install from source
 
-Clone the repository, then choose either a user-local or system-wide install:
-
-User-local install:
+For a user-local installation under `~/.local`:
 
 ```sh
 git clone https://github.com/HeiDumb/pacmangr.git
@@ -155,37 +107,201 @@ cd pacmangr
 ./scripts/install.sh --user
 ```
 
-This installs `pacmangr`, `pacmangr-gui`, the launcher entry, and the icon under
-`~/.local`. Sign out and back in if your launcher does not show Pacmangr
-immediately.
-
-System install:
+For a system-wide installation:
 
 ```sh
 sudo make install
 ```
 
-### Arch Linux package
+If the desktop launcher does not appear immediately after a user-local install,
+sign out and back in, or refresh your desktop environment's application cache.
 
-Build and install the included Arch package with:
+### Uninstall
 
-```sh
-makepkg -si
-```
-
-It installs both the terminal and GTK applications plus the launcher icon.
-
-Uninstall:
+For a system-wide Makefile install:
 
 ```sh
 sudo make uninstall
 ```
 
-## Development Checks
+For a user-local install, remove the installed files:
+
+```sh
+rm -f ~/.local/bin/pacmangr ~/.local/bin/pacmangr-gui
+rm -f ~/.local/share/applications/io.github.hei.pacmangr.desktop
+rm -f ~/.local/share/icons/hicolor/512x512/apps/io.github.hei.pacmangr.png
+```
+
+## Quick start
+
+Open the desktop app from your launcher, or run either interface directly:
+
+```sh
+pacmangr
+pacmangr-gui
+```
+
+To check what Pacmangr can use on the current host:
+
+```sh
+pacmangr managers
+pacmangr doctor
+```
+
+## How it works
+
+```text
+                 ┌──────────────────┐
+                 │  pacmangr GUI    │
+                 │  pacmangr TUI    │
+                 │  pacmangr CLI    │
+                 └────────┬─────────┘
+                          │
+                  shared Python backend
+                          │
+          detect tools ───┼─── cache search / installed data
+                          │
+      ┌───────────────────┼────────────────────┐
+      ▼                   ▼                    ▼
+   pacman/yay          flatpak              apt/dnf/etc.
+      │                   │                    │
+      └───────────────────┴────────────────────┘
+                          │
+                  host package databases
+```
+
+Pacmangr constructs and runs each native manager's normal command rather than
+reimplementing package installation. It keeps a local SQLite cache at
+`~/.cache/pacmangr/pacmangr.sqlite` to make search and installed-package views
+responsive; clearing the cache never removes installed packages.
+
+## Desktop app guide
+
+1. Start **Pacmangr** from your application launcher or run `pacmangr-gui`.
+2. Choose a package source, or leave it on **All sources**.
+3. Search for a package, then select a result to see its summary and status.
+4. Use **Details** or **Versions** before making a change when needed.
+5. Choose **Install**, **Reinstall**, **Remove**, or the **More** menu's
+   all-source update action.
+
+The **Installed packages** switch lists packages already present on the system.
+The **More** menu also refreshes that inventory, shows backend/cache status, and
+clears only Pacmangr's local cache. The app allows one package operation at a
+time and displays its command output and progress in the details pane.
+
+Privileged operations use polkit, so a graphical authentication prompt appears
+when the native manager needs administrator access. Flatpak actions do not need
+host root access when the selected Flatpak installation is user-scoped.
+
+## Terminal UI guide
+
+Run `pacmangr` with no arguments to open the curses interface.
+
+| Key | Action |
+| --- | --- |
+| `/` | Search packages, or filter the installed view |
+| `s` | Open package search |
+| `i` | Show installed packages |
+| `Space` | Select or clear the focused package |
+| `a` / `c` | Select all visible packages / clear selections |
+| `Enter` | Install the focused or selected packages |
+| `x` | Remove the focused installed package(s) |
+| `u` | Update detected package sources |
+| `v` / `V` | Show package information / available versions |
+| `r` | Refresh the active view |
+| `l` | Open the log view |
+| `?` | Show help |
+| `q` | Quit |
+
+The TUI asks for a sudo password only when its native command needs elevated
+access. Read each native manager prompt before accepting it.
+
+## Command-line usage
+
+The headless commands are intended for scripts and repeatable workflows.
+
+```sh
+# Discover available package sources
+pacmangr managers
+pacmangr doctor
+
+# Search and inspect
+pacmangr find firefox
+pacmangr installed python
+pacmangr info pacman
+pacmangr versions firefox
+
+# Preview a native action before running it
+pacmangr install firefox --source pacman --dry-run
+pacmangr remove firefox --source pacman --dry-run
+pacmangr update flatpak --dry-run
+
+# Run a confirmed operation
+pacmangr install org.mozilla.firefox --source flatpak --yes
+pacmangr update --yes
+```
+
+`--source` selects a detected manager, such as `pacman`, `yay`, `flatpak`, or
+`nix`. `--dry-run` prints the native command without running it. `-y` and
+`--yes` pass the appropriate non-interactive confirmation flag to the selected
+backend where one is supported.
+
+### Pip and Git sources
+
+Pip installs can use an isolated virtual environment (recommended), the current
+user's package location, or the system site-packages:
+
+```sh
+pacmangr install requests --source pip --scope venv
+pacmangr install requests --source pip --scope user
+pacmangr install requests --source pip --scope system
+```
+
+Git URLs are cloned or fast-forwarded under `~/.local/src/pacmangr`:
+
+```sh
+pacmangr install https://github.com/owner/project.git --source git
+```
+
+Pacmangr does **not** automatically execute a repository's build, install, or
+hook scripts. Review a repository before running its instructions yourself.
+
+## Safety and scope
+
+- Pacmangr never substitutes its own package database for the host manager.
+- Each backend remains responsible for dependency resolution, signatures,
+  repositories, and rollback behavior.
+- Nix operations use a detected imperative profile only; Pacmangr does not edit
+  NixOS or Home Manager declarations.
+- Package actions can change the host system. Use `--dry-run`, inspect details,
+  and keep backups appropriate for your distribution.
+- Cache clearing affects only `~/.cache/pacmangr`.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| A source is missing | Run `pacmangr managers`; install the native backend and restart Pacmangr. |
+| GUI does not start | Confirm GTK 4 and PyGObject are installed, then run `pacmangr-gui` from a terminal for the error. |
+| No authentication dialog | Install and start a graphical polkit agent, and confirm `pkexec` is available. |
+| Search data seems stale | Use the app's **Clear local cache** action or `pacmangr cache clear`, then search again. |
+| An action fails | Read the native manager's output in the details/log view; Pacmangr reports the underlying tool's result. |
+
+## Development
+
+Run the local checks before contributing:
 
 ```sh
 make check
 ```
 
-The check target compiles the Python script, runs the unit tests, and verifies
-the non-interactive entrypoints.
+This compiles both entry points, runs unit tests, and checks their
+non-interactive commands. To validate the Arch packaging metadata and sources:
+
+```sh
+makepkg --verifysource
+```
+
+## License
+
+Pacmangr is licensed under the [MIT License](LICENSE).
