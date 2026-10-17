@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0
+
+- Added scriptable `install`, `remove`, and `update` CLI commands with native
+  manager selection, dry-run output, and optional non-interactive confirmation.
+- Added GUI source filtering, package-version lookup, all-source updates,
+  manager diagnostics, cache information, cache clearing, and installed refresh.
+- Reorganised the GTK layout into a focused search and details workflow, hiding
+  unavailable package actions until a result is selected.
+- Follow the Heilios palette and use an opaque app-specific Hyprland rule for
+  consistently readable package content.
+- Search individual extra backends such as Nix instead of requiring a unified
+  all-manager search.
+- Added managed Git URL fetching and fast-forward updates without automatically
+  executing untrusted repository build scripts.
+- Added selectable pip installation scopes: isolated venv, user, or privileged
+  system installation.
+
+## 0.2.2
+
+- Fixed the search state race that discarded a new query while another
+  background lookup was still active.
+- Queue the latest query automatically and discard stale results instead of
+  labeling them with the new search text.
+- Added regression tests for queued, stale, and completed search states.
+- Added `pacmangr-gui`, a personal GTK4 interface backed by the same unified
+  search, cache, installed-package, details, install, and remove logic.
+- Added a desktop entry and desktop-palette integration for the GUI.
+- Added a themed Pac-Man eating animation for background installs,
+  reinstalls, removals, and future package-operation modes.
+- Stream package-manager output through a pseudo-terminal so the GUI can show
+  live download percentage, speed, and reported or estimated ETA.
+
 ## 0.2.1
 
 - Made `s` open the search prompt directly instead of requiring a second key.

@@ -23,16 +23,18 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import sysconfig
 import textwrap
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 
 APP_NAME = "pacmangr"
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 SPINNER = "|/-\\"
 MAX_RESULTS = 500
 APPIMAGE_SCAN_DEPTH = 4
@@ -50,6 +52,8 @@ SEARCH_TIMEOUT_SECONDS = {
     "pipx": 8,
 }
 CACHE_DB_PATH = Path.home() / ".cache" / APP_NAME / "pacmangr.sqlite"
+GIT_SOURCE_ROOT = Path.home() / ".local" / "src" / APP_NAME
+PIP_VENV_ROOT = Path.home() / ".local" / "share" / APP_NAME / "venvs"
 CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 CACHE_TTL_SECONDS = {
     "pacman": 6 * 60 * 60,
@@ -309,6 +313,57 @@ def manager_spec_command(
     return cmd
 
 
+def system_update_commands(tools: "Tools", source: str = "all") -> list[tuple[str, list[str]]]:
+    """Return native update commands without executing or merging package ecosystems."""
+    commands: list[tuple[str, list[str]]] = []
+    if source in {"all", "pacman", "aur"}:
+        helper = tools.aur_helper
+        if helper:
+            name, path = helper
+            commands.append((name, [path, "-Syu"]))
+        elif tools.pacman and tools.privilege:
+            commands.append(("pacman", [tools.privilege, tools.pacman, "-Syu"]))
+    if source in {"all", "flatpak"} and tools.flatpak:
+        commands.append(("flatpak", [tools.flatpak, "update"]))
+    if source in {"all", "apt"} and tools.apt and tools.privilege:
+        commands.extend([
+            ("apt metadata", [tools.privilege, tools.apt, "update"]),
+            ("apt packages", [tools.privilege, tools.apt, "upgrade"]),
+        ])
+    if source in {"all", "snap"} and tools.snap and tools.privilege:
+        commands.append(("snap", [tools.privilege, tools.snap, "refresh"]))
+    if source in {"all", "git"} and tools.git:
+        for item in managed_git_checkouts(tools):
+            commands.append((f"git · {item.name}", [tools.git, "-C", item.package_id, "pull", "--ff-only"]))
+    for manager in tools.extra_managers:
+        if source not in {"all", manager}:
+            continue
+        cmd = manager_spec_command(manager, "update", tools)
+        if cmd:
+            commands.append((manager, cmd))
+    return commands
+
+
+def noninteractive_command(command: list[str]) -> list[str]:
+    """Add the native assume-yes switch used by scriptable CLI operations."""
+    prepared = list(command)
+    real_index = 1 if prepared and Path(prepared[0]).name in {"sudo", "doas"} else 0
+    if real_index >= len(prepared):
+        return prepared
+    tool = Path(prepared[real_index]).name
+    tail = prepared[real_index + 1:]
+    if tool in {"pacman", "yay", "paru"} and "--noconfirm" not in tail:
+        prepared.insert(real_index + 1, "--noconfirm")
+    elif tool == "flatpak" and "-y" not in tail:
+        prepared.append("-y")
+    elif tool in {"apt", "apt-get", "dnf", "zypper", "xbps-install", "xbps-remove", "pkg"}:
+        if "-y" not in tail and "--non-interactive" not in tail:
+            prepared.append("--non-interactive" if tool == "zypper" else "-y")
+    elif tool == "pip" and "uninstall" in tail and "-y" not in tail:
+        prepared.append("-y")
+    return prepared
+
+
 @dataclass
 class Tools:
     pacman: str | None
@@ -323,6 +378,7 @@ class Tools:
     snap: str | None
     sudo: str | None
     doas: str | None
+    git: str | None
     extra_managers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -340,6 +396,7 @@ class Tools:
             snap=shutil.which("snap"),
             sudo=shutil.which("sudo"),
             doas=shutil.which("doas"),
+            git=shutil.which("git"),
             extra_managers=detect_extra_managers(),
         )
 
@@ -357,7 +414,7 @@ class Tools:
 
     def enabled_labels(self) -> str:
         labels = []
-        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "pacseek", "downgrade"):
+        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "git", "pacseek", "downgrade"):
             if getattr(self, label):
                 labels.append("dpkg" if label == "dpkg_query" else label)
         labels.extend(name for name in self.extra_managers if name not in labels)
@@ -383,7 +440,21 @@ class PackageItem:
             return f"{self.name} ({self.package_id})"
         return self.name
 
-    def install_command(self, tools: Tools) -> list[str] | None:
+    def install_command(self, tools: Tools, install_scope: str = "user") -> list[str] | None:
+        if self.source == "git":
+            if not tools.git or not self.origin:
+                return None
+            target = Path(self.package_id)
+            if (target / ".git").is_dir():
+                return [tools.git, "-C", str(target), "pull", "--ff-only"]
+            return [sys.executable, str(Path(__file__).resolve()), "_git-fetch", self.origin, str(target)]
+        if self.source == "pip" or self.manager == "pip":
+            if install_scope not in {"venv", "user", "system"}:
+                return None
+            helper = [sys.executable, str(Path(__file__).resolve()), "_pip-install", install_scope, self.package_id]
+            if install_scope == "system":
+                return [tools.privilege, *helper] if tools.privilege else None
+            return helper
         if self.source == "flatpak":
             if not tools.flatpak:
                 return None
@@ -412,6 +483,12 @@ class PackageItem:
         return None
 
     def remove_command(self, tools: Tools) -> list[str] | None:
+        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith("venv:"):
+            target = Path(self.origin.removeprefix("venv:"))
+            gio = shutil.which("gio")
+            return [gio, "trash", str(target)] if gio else None
+        if self.source == "git":
+            return None
         if self.source == "flatpak":
             if tools.flatpak:
                 return [tools.flatpak, "uninstall", self.package_id]
@@ -435,6 +512,17 @@ class PackageItem:
         return None
 
     def info_command(self, tools: Tools, installed_view: bool) -> list[str] | None:
+        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith("venv:"):
+            target = Path(self.origin.removeprefix("venv:"))
+            python = target / "bin/python"
+            return [str(python), "-m", "pip", "show", self.package_id] if python.is_file() else None
+        if self.source == "git":
+            if not tools.git:
+                return None
+            target = Path(self.package_id)
+            if (target / ".git").is_dir():
+                return [tools.git, "-C", str(target), "log", "-1", "--decorate", "--stat"]
+            return [tools.git, "ls-remote", "--symref", self.origin, "HEAD"]
         if self.source == "flatpak":
             if not tools.flatpak:
                 return None
@@ -1611,6 +1699,89 @@ def parse_manager_installed(manager: str, output: str) -> list[PackageItem]:
     return parse_generic_installed(manager, output)
 
 
+def is_git_url(value: str) -> bool:
+    candidate = value.strip()
+    if candidate.startswith(("https://", "http://", "ssh://", "git://", "file://")):
+        return "/" in urllib.parse.urlparse(candidate).path
+    return bool(re.match(r"^[\w.-]+@[\w.-]+:[\w./-]+(?:\.git)?$", candidate))
+
+
+def git_checkout_slug(url: str) -> str:
+    candidate = url.strip().rstrip("/")
+    if re.match(r"^[\w.-]+@[\w.-]+:", candidate):
+        path = candidate.split(":", 1)[1]
+    else:
+        path = urllib.parse.urlparse(candidate).path.lstrip("/")
+    path = re.sub(r"\.git$", "", path)
+    parts = [re.sub(r"[^A-Za-z0-9_.+-]+", "-", part) for part in path.split("/") if part]
+    slug = "--".join(parts[-2:]) if parts else "repository"
+    return slug.strip("-.") or "repository"
+
+
+def git_package(url: str) -> PackageItem | None:
+    if not is_git_url(url):
+        return None
+    clean_url = url.strip()
+    slug = git_checkout_slug(clean_url)
+    target = GIT_SOURCE_ROOT / slug
+    name = slug.split("--")[-1]
+    return PackageItem(
+        source="git",
+        manager="git",
+        name=name,
+        package_id=str(target),
+        repo="managed Git checkout",
+        installed=(target / ".git").is_dir(),
+        origin=clean_url,
+        description=f"Fetch {clean_url} into {target}. Pacmangr will not execute repository build scripts automatically.",
+    )
+
+
+def managed_git_checkouts(tools: Tools) -> list[PackageItem]:
+    if not tools.git or not GIT_SOURCE_ROOT.is_dir():
+        return []
+    items: list[PackageItem] = []
+    for target in sorted(GIT_SOURCE_ROOT.iterdir()):
+        if not (target / ".git").is_dir():
+            continue
+        code, output = run_capture([tools.git, "-C", str(target), "remote", "get-url", "origin"], timeout=5)
+        url = output.strip() if code == 0 else ""
+        item = git_package(url) if url else None
+        if item is None:
+            item = PackageItem("git", "git", target.name, str(target), installed=True, repo="managed Git checkout")
+        item.package_id = str(target)
+        item.installed = True
+        items.append(item)
+    return items
+
+
+def managed_pip_venvs() -> list[PackageItem]:
+    if not PIP_VENV_ROOT.is_dir():
+        return []
+    items: list[PackageItem] = []
+    for target in sorted(PIP_VENV_ROOT.iterdir()):
+        metadata = target / ".pacmangr-package"
+        if not (target / "bin/python").is_file() or not metadata.is_file():
+            continue
+        try:
+            package = metadata.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not package:
+            continue
+        items.append(PackageItem(
+            source="pip",
+            manager="pip",
+            name=package,
+            package_id=package,
+            repo="isolated venv",
+            installed=True,
+            origin=f"venv:{target}",
+            description=f"Isolated Python environment: {target}",
+        ))
+    return items
+
+
 def appimage_roots() -> list[Path]:
     home = Path.home()
     return [
@@ -1740,6 +1911,8 @@ def collect_installed_packages(
         else:
             report(f"{manager} installed list exited {code}:\n{output.strip()}")
 
+    items.extend(managed_git_checkouts(tools))
+    items.extend(managed_pip_venvs())
     items.extend(find_appimages())
     return sorted(items, key=lambda item: (item.source, item.name.lower()))
 
@@ -1782,6 +1955,7 @@ class PkgUI:
         self.spinner_index = 0
         self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
         self.pending_search_query: str | None = None
+        self.active_search_query = ""
         self.last_installed_load = 0.0
         self.running = True
 
@@ -1808,14 +1982,55 @@ class PkgUI:
             curses.use_default_colors()
         except curses.error:
             return
-        pairs = (
-            (1, curses.COLOR_CYAN, -1),
-            (2, curses.COLOR_BLACK, curses.COLOR_CYAN),
-            (3, curses.COLOR_YELLOW, -1),
-            (4, curses.COLOR_GREEN, -1),
-            (5, curses.COLOR_RED, -1),
-            (6, curses.COLOR_MAGENTA, -1),
-        )
+
+        pairs = None
+        scheme_path = Path.home() / ".local/state/caelestia/scheme.json"
+        try:
+            colours = json.loads(scheme_path.read_text(encoding="utf-8")).get("colours", {})
+            if not isinstance(colours, dict):
+                colours = {}
+        except (OSError, ValueError, TypeError):
+            colours = {}
+
+        if colours and curses.can_change_color() and curses.COLORS >= 16:
+            roles = (
+                (8, colours.get("primary") or colours.get("secondary"), "adc9ea"),
+                (9, colours.get("onPrimary") or colours.get("background"), "26425e"),
+                (10, colours.get("secondary") or colours.get("primary"), "e6bad7"),
+                (11, colours.get("success") or colours.get("term2"), "b5ccba"),
+                (12, colours.get("error") or colours.get("term1"), "fa746f"),
+                (13, colours.get("tertiary") or colours.get("primaryFixed"), "c3c3eb"),
+            )
+            try:
+                for colour_id, value, fallback in roles:
+                    rgb = str(value or fallback).strip().lstrip("#")[:6]
+                    red, green, blue = (int(rgb[index:index + 2], 16) for index in (0, 2, 4))
+                    curses.init_color(
+                        colour_id,
+                        round(red * 1000 / 255),
+                        round(green * 1000 / 255),
+                        round(blue * 1000 / 255),
+                    )
+                pairs = (
+                    (1, 8, -1),
+                    (2, 9, 8),
+                    (3, 10, -1),
+                    (4, 11, -1),
+                    (5, 12, -1),
+                    (6, 13, -1),
+                )
+            except (curses.error, ValueError):
+                pairs = None
+
+        if pairs is None:
+            pairs = (
+                (1, curses.COLOR_CYAN, -1),
+                (2, curses.COLOR_BLACK, curses.COLOR_CYAN),
+                (3, curses.COLOR_YELLOW, -1),
+                (4, curses.COLOR_GREEN, -1),
+                (5, curses.COLOR_RED, -1),
+                (6, curses.COLOR_MAGENTA, -1),
+            )
         for pair_id, foreground, background in pairs:
             try:
                 curses.init_pair(pair_id, foreground, background)
@@ -1918,45 +2133,61 @@ class PkgUI:
                 if error:
                     self.status = f"{label} failed: {error}"
                     self.log(self.status)
-                    continue
-                if label == "searching":
-                    self.search_results = result  # type: ignore[assignment]
-                    self.refresh_marked_metadata(self.search_results)
-                    self.selected = 0
-                    self.scroll = 0
-                    self.status = f"Found {len(self.search_results)} packages for {self.query!r}."
-                    self.log(self.status)
-                elif label == "loading installed packages":
-                    self.apply_installed_items(result)  # type: ignore[arg-type]
-                    self.cache.save_installed(self.installed_items)
-                    self.last_installed_load = time.time()
-                    self.status = f"Loaded {len(self.installed_items)} installed packages."
-                    self.log(self.status)
-                    pending_search = self.pending_search_query
-                    if pending_search:
-                        self.pending_search_query = None
-                        self.start_search(pending_search)
-                elif label.startswith("loading versions"):
-                    versions = result if isinstance(result, list) else []
-                    self.version_rows = versions  # type: ignore[assignment]
-                    self.cache.save_versions(
-                        self.version_pending_manager,
-                        self.version_pending_package,
-                        self.version_rows,
-                    )
-                    self.version_shelf_open = True
-                    self.version_focus = True
-                    self.version_cursor = 0
-                    self.version_scroll = 0
-                    self.status = f"Loaded {len(self.version_rows)} versions for {self.version_pending_package}."
-                    self.log(format_versions(self.version_pending_package, self.version_rows))
-                elif label.startswith("loading info"):
-                    self.mode = "log"
-                    self.selected = len(self.log_lines) - 1
-                    self.scroll = 0
-                    self.status = "Info loaded in log view."
                 else:
-                    self.status = f"{label} finished."
+                    if label == "searching":
+                        completed_query = self.active_search_query
+                        if completed_query == self.query:
+                            self.search_results = result  # type: ignore[assignment]
+                            self.refresh_marked_metadata(self.search_results)
+                            self.selected = 0
+                            self.scroll = 0
+                            self.status = (
+                                f"Found {len(self.search_results)} packages "
+                                f"for {completed_query!r}."
+                            )
+                            self.log(self.status)
+                        else:
+                            self.log(
+                                f"Discarded stale results for {completed_query!r}; "
+                                f"latest search is {self.query!r}."
+                            )
+                    elif label == "loading installed packages":
+                        self.apply_installed_items(result)  # type: ignore[arg-type]
+                        self.cache.save_installed(self.installed_items)
+                        self.last_installed_load = time.time()
+                        self.status = f"Loaded {len(self.installed_items)} installed packages."
+                        self.log(self.status)
+                    elif label.startswith("loading versions"):
+                        versions = result if isinstance(result, list) else []
+                        self.version_rows = versions  # type: ignore[assignment]
+                        self.cache.save_versions(
+                            self.version_pending_manager,
+                            self.version_pending_package,
+                            self.version_rows,
+                        )
+                        self.version_shelf_open = True
+                        self.version_focus = True
+                        self.version_cursor = 0
+                        self.version_scroll = 0
+                        self.status = f"Loaded {len(self.version_rows)} versions for {self.version_pending_package}."
+                        self.log(format_versions(self.version_pending_package, self.version_rows))
+                    elif label.startswith("loading info"):
+                        self.mode = "log"
+                        self.selected = len(self.log_lines) - 1
+                        self.scroll = 0
+                        self.status = "Info loaded in log view."
+                    else:
+                        self.status = f"{label} finished."
+
+                pending_search = self.pending_search_query
+                if pending_search:
+                    self.pending_search_query = None
+                    if not (
+                        error is None
+                        and label == "searching"
+                        and pending_search == self.active_search_query
+                    ):
+                        self.start_search(pending_search)
 
     def search(self) -> None:
         query = self.prompt("Search packages")
@@ -1976,14 +2207,16 @@ class PkgUI:
             self.refresh_marked_metadata(self.search_results)
             self.status = f"Loaded {len(self.search_results)} cached results; refreshing live."
             self.log(self.status)
-        elif self.busy and self.busy_label == "loading installed packages":
+        else:
             self.search_results = []
 
-        if self.busy and self.busy_label == "loading installed packages":
+        if self.busy:
             self.pending_search_query = query
-            self.status = f"Queued search for {query!r}; finishing startup package load."
+            self.status = f"Queued search for {query!r}; finishing {self.busy_label}."
             self.log(self.status)
             return
+
+        self.active_search_query = query
 
         def job() -> list[PackageItem]:
             return self.search_packages(query, "all")
@@ -2004,10 +2237,14 @@ class PkgUI:
             managers.add("apt")
         if backend in ("all", "snap") and self.tools.snap:
             managers.add("snap")
+        if backend in ("all", "git") and self.tools.git:
+            managers.add("git")
         if backend in ("all", "appimage"):
             managers.add("appimage")
-        if backend == "all":
+        if backend == "all" or backend in self.tools.extra_managers:
             for manager in self.tools.extra_managers:
+                if backend != "all" and manager != backend:
+                    continue
                 if "search" in MANAGER_SPECS.get(manager, {}):
                     managers.add(manager)
         return managers
@@ -2101,6 +2338,11 @@ class PkgUI:
                 ),
             ))
 
+        if backend in ("all", "git") and self.tools.git and is_git_url(query):
+            item = git_package(query)
+            if item:
+                jobs.append(("git", lambda package=item: ("git", [package], True, "")))
+
         if backend in ("all", "yay") and self.tools.yay:
             jobs.append((
                 "yay",
@@ -2162,8 +2404,10 @@ class PkgUI:
                 lambda: ("appimage", find_appimages(query), True, ""),
             ))
 
-        if backend == "all":
+        if backend == "all" or backend in self.tools.extra_managers:
             for manager in self.tools.extra_managers:
+                if backend != "all" and manager != backend:
+                    continue
                 spec = MANAGER_SPECS.get(manager, {})
                 if "search" not in spec:
                     continue
@@ -2787,32 +3031,14 @@ class PkgUI:
         self.start_background_commands("removing selected packages", commands, "remove")
 
     def update_system(self) -> None:
-        commands: list[list[str]] = []
-        helper = self.tools.aur_helper
-        if helper:
-            _, path = helper
-            commands.append([path, "-Syu"])
-        elif self.tools.pacman and self.tools.privilege:
-            commands.append([self.tools.privilege, self.tools.pacman, "-Syu"])
-        if self.tools.flatpak:
-            commands.append([self.tools.flatpak, "update"])
-        if self.tools.apt and self.tools.privilege:
-            commands.append([self.tools.privilege, self.tools.apt, "update"])
-            commands.append([self.tools.privilege, self.tools.apt, "upgrade"])
-        if self.tools.snap and self.tools.privilege:
-            commands.append([self.tools.privilege, self.tools.snap, "refresh"])
-        for manager in self.tools.extra_managers:
-            cmd = manager_spec_command(manager, "update", self.tools)
-            if cmd:
-                commands.append(cmd)
-
+        commands = system_update_commands(self.tools)
         if not commands:
             self.status = "No update-capable package tool found."
             return
         if not self.confirm("Run full package update?"):
             self.status = "Update cancelled."
             return
-        self.start_background_commands("updating packages", [(shlex.join(cmd), cmd) for cmd in commands], "update")
+        self.start_background_commands("updating packages", commands, "update")
 
     def version_cache_manager(self, item: PackageItem) -> str:
         if item.source in {"pacman", "aur", "aur/local"} or item.manager in {"pacman", "yay", "paru"}:
@@ -3561,6 +3787,124 @@ def clear_cache(cache: PackageCache) -> None:
     print("cache cleared" if removed else "cache already empty")
 
 
+def parse_cli_operation(argv: list[str], *, needs_package: bool = True) -> tuple[str, str, str, bool, bool]:
+    """Parse the deliberately small, stable CLI operation option set."""
+    source = "all"
+    scope = "user"
+    assume_yes = False
+    dry_run = False
+    positional: list[str] = []
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"-y", "--yes"}:
+            assume_yes = True
+        elif arg == "--dry-run":
+            dry_run = True
+        elif arg == "--source":
+            index += 1
+            if index >= len(argv):
+                raise ValueError("--source needs a manager name")
+            source = argv[index].lower()
+        elif arg.startswith("--source="):
+            source = arg.split("=", 1)[1].lower()
+        elif arg == "--scope":
+            index += 1
+            if index >= len(argv):
+                raise ValueError("--scope needs venv, user, or system")
+            scope = argv[index].lower()
+        elif arg.startswith("--scope="):
+            scope = arg.split("=", 1)[1].lower()
+        elif arg.startswith("-"):
+            raise ValueError(f"unknown option: {arg}")
+        else:
+            positional.append(arg)
+        index += 1
+    if needs_package and len(positional) != 1:
+        raise ValueError("exactly one package name is required")
+    if not needs_package and len(positional) > 1:
+        raise ValueError("update accepts at most one source")
+    if not needs_package and positional:
+        source = positional[0].lower()
+    if scope not in {"venv", "user", "system"}:
+        raise ValueError("--scope must be venv, user, or system")
+    return (positional[0] if positional else "", source, scope, assume_yes, dry_run)
+
+
+def resolve_cli_package(package: str, source: str, action: str, tools: Tools) -> PackageItem | None:
+    if source in {"all", "git"} and action == "install" and is_git_url(package):
+        return git_package(package)
+    if action == "remove":
+        items = collect_installed_packages(tools)
+    else:
+        backend = source
+        if source == "aur":
+            helper = tools.aur_helper
+            backend = helper[0] if helper else "all"
+        app = headless_ui()
+        items = app.search_packages(package, backend)
+    if source != "all":
+        aliases = {"aur": {"aur", "aur/local", "yay", "paru"}, "pacman": {"pacman"}}
+        accepted = aliases.get(source, {source})
+        items = [item for item in items if item.source in accepted or item.manager in accepted]
+    exact = [item for item in items if item.package_id == package or item.name == package]
+    return (exact or items or [None])[0]
+
+
+def run_cli_command(label: str, command: list[str], *, assume_yes: bool, dry_run: bool) -> int:
+    argv = noninteractive_command(command) if assume_yes else command
+    print(f"[{label}] {shlex.join(argv)}")
+    if dry_run:
+        return 0
+    try:
+        return subprocess.run(argv, check=False).returncode
+    except FileNotFoundError as exc:
+        print(f"could not start {exc.filename}: command not found", file=sys.stderr)
+        return 127
+
+
+def run_git_fetch(url: str, target_value: str) -> int:
+    git = shutil.which("git")
+    if not git:
+        print("git is not installed", file=sys.stderr)
+        return 127
+    item = git_package(url)
+    target = Path(target_value).expanduser().resolve()
+    root = GIT_SOURCE_ROOT.resolve()
+    if item is None or target.parent != root or target != Path(item.package_id).resolve():
+        print("refusing Git checkout outside Pacmangr's managed source directory", file=sys.stderr)
+        return 2
+    root.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        print(f"checkout already exists: {target}", file=sys.stderr)
+        return 1
+    return subprocess.run([git, "clone", "--filter=blob:none", url, str(target)], check=False).returncode
+
+
+def run_pip_install(scope: str, package: str) -> int:
+    safe_name = re.sub(r"[^A-Za-z0-9_.+-]+", "-", package).strip("-.") or "package"
+    if scope == "venv":
+        target = PIP_VENV_ROOT / safe_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not (target / "bin/python").is_file():
+            code = subprocess.run([sys.executable, "-m", "venv", str(target)], check=False).returncode
+            if code != 0:
+                return code
+        print(f"venv: {target}")
+        code = subprocess.run([str(target / "bin/python"), "-m", "pip", "install", "--upgrade", package], check=False).returncode
+        if code == 0:
+            (target / ".pacmangr-package").write_text(package + "\n", encoding="utf-8")
+        return code
+    command = [sys.executable, "-m", "pip", "install"]
+    externally_managed = Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED"
+    if externally_managed.is_file():
+        command.append("--break-system-packages")
+    if scope == "user":
+        command.append("--user")
+    command.append(package)
+    return subprocess.run(command, check=False).returncode
+
+
 def usage() -> str:
     return "\n".join(
         (
@@ -3570,6 +3914,9 @@ def usage() -> str:
             "commands:",
             "  search <query>       open the TUI and run a search",
             "  find <query>         print unified search results",
+            "  install <pkg>        install a package (--source, --scope, -y, --dry-run)",
+            "  remove <pkg>         remove a package (--source NAME, -y, --dry-run)",
+            "  update [source]       update all or one package source (-y, --dry-run)",
             "  installed [filter]   print installed packages",
             "  info <package>       print native package information",
             "  versions <package>   print available package versions",
@@ -3591,6 +3938,14 @@ def main(stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
 if __name__ == "__main__":
     try:
         if len(sys.argv) > 1:
+            if sys.argv[1] == "_git-fetch":
+                if len(sys.argv) != 4:
+                    raise SystemExit(2)
+                raise SystemExit(run_git_fetch(sys.argv[2], sys.argv[3]))
+            if sys.argv[1] == "_pip-install":
+                if len(sys.argv) != 4 or sys.argv[2] not in {"venv", "user", "system"}:
+                    raise SystemExit(2)
+                raise SystemExit(run_pip_install(sys.argv[2], sys.argv[3]))
             if sys.argv[1] in {"-V", "--version"}:
                 print(f"{APP_NAME} {VERSION}")
                 raise SystemExit(0)
@@ -3605,6 +3960,42 @@ if __name__ == "__main__":
                 app = headless_ui()
                 print_packages(app.search_packages(" ".join(sys.argv[2:]), "all"))
                 raise SystemExit(0)
+            if sys.argv[1] in {"install", "remove"}:
+                action = sys.argv[1]
+                try:
+                    package, source, scope, assume_yes, dry_run = parse_cli_operation(sys.argv[2:])
+                except ValueError as exc:
+                    print(f"usage: pacmangr {action} <package> [--source NAME] [--scope venv|user|system] [-y] [--dry-run]", file=sys.stderr)
+                    print(exc, file=sys.stderr)
+                    raise SystemExit(2)
+                tools = Tools.detect()
+                item = resolve_cli_package(package, source, action, tools)
+                if item is None:
+                    print(f"{package!r} was not found in {source}", file=sys.stderr)
+                    raise SystemExit(1)
+                command = item.install_command(tools, install_scope=scope) if action == "install" else item.remove_command(tools)
+                if not command:
+                    print(f"no {action} command is available for {item.title()} ({item.source})", file=sys.stderr)
+                    raise SystemExit(1)
+                raise SystemExit(run_cli_command(f"{action} {item.source}", command, assume_yes=assume_yes, dry_run=dry_run))
+            if sys.argv[1] == "update":
+                try:
+                    _package, source, _scope, assume_yes, dry_run = parse_cli_operation(sys.argv[2:], needs_package=False)
+                except ValueError as exc:
+                    print("usage: pacmangr update [source] [-y] [--dry-run]", file=sys.stderr)
+                    print(exc, file=sys.stderr)
+                    raise SystemExit(2)
+                commands = system_update_commands(Tools.detect(), source)
+                if not commands:
+                    print(f"no update command is available for {source}", file=sys.stderr)
+                    raise SystemExit(1)
+                result = 0
+                for label, command in commands:
+                    code = run_cli_command(label, command, assume_yes=assume_yes, dry_run=dry_run)
+                    result = result or code
+                    if code != 0:
+                        break
+                raise SystemExit(result)
             if sys.argv[1] == "installed":
                 needle = " ".join(sys.argv[2:]).strip().lower()
                 cache = PackageCache()

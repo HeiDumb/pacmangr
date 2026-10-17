@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import queue
 import sys
 import unittest
 from pathlib import Path
@@ -51,6 +52,77 @@ class SearchKeyTests(unittest.TestCase):
 
         ui.filter_installed.assert_called_once_with()
         ui.search.assert_not_called()
+
+
+class SearchStateTests(unittest.TestCase):
+    def make_ui(self):
+        ui = MODULE.PkgUI.__new__(MODULE.PkgUI)
+        ui.query = ""
+        ui.mode = "search"
+        ui.selected = 0
+        ui.scroll = 0
+        ui.search_results = []
+        ui.pending_search_query = None
+        ui.active_search_query = ""
+        ui.busy = False
+        ui.busy_label = ""
+        ui.status = ""
+        ui.log_lines = []
+        ui.marked = {}
+        ui.events = queue.Queue()
+        ui.cache = Mock()
+        ui.cache.load_search.return_value = []
+        ui.enabled_search_managers = Mock(return_value={"pacman"})
+        ui.refresh_marked_metadata = Mock()
+        ui.spawn_job = Mock()
+        return ui
+
+    def test_search_queues_latest_query_while_another_job_is_busy(self):
+        ui = self.make_ui()
+        ui.busy = True
+        ui.busy_label = "searching"
+        ui.active_search_query = "old-query"
+        ui.search_results = [Mock()]
+
+        ui.start_search("new-query")
+
+        self.assertEqual(ui.query, "new-query")
+        self.assertEqual(ui.pending_search_query, "new-query")
+        self.assertEqual(ui.search_results, [])
+        ui.spawn_job.assert_not_called()
+        self.assertIn("Queued search", ui.status)
+
+    def test_stale_search_completion_starts_queued_search(self):
+        ui = self.make_ui()
+        stale_item = Mock()
+        ui.busy = True
+        ui.busy_label = "searching"
+        ui.active_search_query = "old-query"
+        ui.query = "new-query"
+        ui.pending_search_query = "new-query"
+        ui.events.put(("done", ("searching", [stale_item], None)))
+
+        ui.poll_events()
+
+        self.assertEqual(ui.search_results, [])
+        self.assertIsNone(ui.pending_search_query)
+        ui.spawn_job.assert_called_once()
+        self.assertEqual(ui.active_search_query, "new-query")
+
+    def test_current_search_completion_populates_results(self):
+        ui = self.make_ui()
+        item = Mock()
+        ui.busy = True
+        ui.busy_label = "searching"
+        ui.active_search_query = "hyprland"
+        ui.query = "hyprland"
+        ui.events.put(("done", ("searching", [item], None)))
+
+        ui.poll_events()
+
+        self.assertEqual(ui.search_results, [item])
+        ui.refresh_marked_metadata.assert_called_once_with([item])
+        self.assertIn("Found 1 packages", ui.status)
 
 
 class OutputTests(unittest.TestCase):

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=pacmangr
+GenericName=Package Manager
+Comment=Search and manage packages across the system
+Exec=pacmangr-gui
+Icon=io.github.hei.pacmangr
+Terminal=false
+Categories=Settings;PackageManager;
+StartupNotify=true
+StartupWMClass=io.github.hei.pacmangr

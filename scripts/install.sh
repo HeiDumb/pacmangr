@@ -10,6 +10,11 @@ elif [ "${1:-}" = "--prefix" ] && [ -n "${2:-}" ]; then
 fi
 
 bindir="${prefix}/bin"
+datadir="${prefix}/share"
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 mkdir -p "$bindir"
-install -m 755 "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/pacmangr" "$bindir/pacmangr"
-printf 'installed %s\n' "$bindir/pacmangr"
+install -m 755 "$root/pacmangr" "$bindir/pacmangr"
+install -m 755 "$root/pacmangr-gui" "$bindir/pacmangr-gui"
+install -Dm644 "$root/io.github.hei.pacmangr.desktop" "$datadir/applications/io.github.hei.pacmangr.desktop"
+install -Dm644 "$root/io.github.hei.pacmangr.png" "$datadir/icons/hicolor/512x512/apps/io.github.hei.pacmangr.png"
+printf 'installed %s and %s\n' "$bindir/pacmangr" "$bindir/pacmangr-gui"
