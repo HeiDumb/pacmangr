@@ -1,6 +1,6 @@
 # pacmangr
 
-![Pacmangr](showcase.gif)
+![Pacmangr](assets/showcase.gif)
 
 **One package-management front end for the package managers already on your
 computer.** Pacmangr is available as an interactive terminal UI, a GTK desktop

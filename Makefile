@@ -10,13 +10,16 @@ install:
 	install -Dm755 pacmangr "$(BINDIR)/pacmangr"
 	install -Dm755 pacmangr-gui "$(BINDIR)/pacmangr-gui"
 	install -Dm644 $(APP_ID).desktop "$(APPLICATIONDIR)/$(APP_ID).desktop"
-	install -Dm644 $(APP_ID).png "$(ICONDIR)/$(APP_ID).png"
+	install -Dm644 assets/$(APP_ID).png "$(ICONDIR)/$(APP_ID).png"
+	install -Dm644 assets/pacmangr-exit.png "$(DESTDIR)$(PREFIX)/share/pacmangr/assets/pacmangr-exit.png"
 
 uninstall:
 	rm -f "$(BINDIR)/pacmangr"
 	rm -f "$(BINDIR)/pacmangr-gui"
 	rm -f "$(APPLICATIONDIR)/$(APP_ID).desktop"
 	rm -f "$(ICONDIR)/$(APP_ID).png"
+	rm -f "$(DESTDIR)$(PREFIX)/share/pacmangr/assets/pacmangr-exit.png"
+	rmdir --ignore-fail-on-non-empty "$(DESTDIR)$(PREFIX)/share/pacmangr/assets" "$(DESTDIR)$(PREFIX)/share/pacmangr" 2>/dev/null || true
 
 check:
 	python3 -m py_compile pacmangr

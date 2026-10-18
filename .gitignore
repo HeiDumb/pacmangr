@@ -1,8 +1,13 @@
+# Python bytecode and caches
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Arch Linux makepkg output (root-level only)
+/pkg/
+/src/
 *.pkg.tar.*
 *.src.tar.*
-pkg/
-src/
+
+# Local build/archive artifacts
 *.tar.gz
 *.tar.zst

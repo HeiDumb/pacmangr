@@ -230,6 +230,18 @@ def install_css() -> None:
     .subtitle-label, .muted {{
         color: #{c['muted']};
     }}
+    button.pacmangr-exit-button {{
+        min-width: 30px;
+        min-height: 30px;
+        padding: 0;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 10px;
+    }}
+    button.pacmangr-exit-button:hover {{
+        background: alpha(#{c['error']}, 0.20);
+        border-color: #{c['error']};
+    }}
     .search-card, .detail-card, .status-card {{
         background: alpha(#{c['surface']}, 0.92);
         border: 1px solid #{c['outline']};
@@ -562,14 +574,16 @@ class PacmangrLogo(Gtk.DrawingArea):
         self._body = hex_rgb(colours["primary"])
         self._eye = hex_rgb(colours["on_primary"])
         self._pellet = hex_rgb(colours["success"])
-        self.set_content_width(38)
-        self.set_content_height(38)
-        self.set_size_request(38, 38)
+        # Keep the brand mark at a normal header-bar icon size. The drawing
+        # area stays compact so it cannot inflate the title bar height.
+        self.set_content_width(30)
+        self.set_content_height(30)
+        self.set_size_request(30, 30)
         self.set_draw_func(self._draw)
 
     def _draw(self, _area, context, width: int, height: int) -> None:
-        center_x, center_y = 15.0, height / 2
-        radius = 12.0
+        center_x, center_y = 13.5, height / 2
+        radius = 12.5
         mouth = math.radians(24)
         context.set_source_rgb(*self._body)
         context.move_to(center_x, center_y)
@@ -577,10 +591,10 @@ class PacmangrLogo(Gtk.DrawingArea):
         context.close_path()
         context.fill()
         context.set_source_rgb(*self._eye)
-        context.arc(center_x + 1.0, center_y - 5.5, 1.6, 0, math.tau)
+        context.arc(center_x + 1.0, center_y - 5.5, 1.5, 0, math.tau)
         context.fill()
         context.set_source_rgb(*self._pellet)
-        context.arc(width - 4.5, center_y, 2.5, 0, math.tau)
+        context.arc(width - 3.0, center_y, 2.2, 0, math.tau)
         context.fill()
 
 
@@ -675,6 +689,38 @@ class PacmangrGUI(Gtk.Application):
         assert self.window
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(False)
+
+        # Use the Pacmangr exit artwork instead of a generic cross icon.
+        close_button = Gtk.Button()
+        close_button.set_tooltip_text("Close Pacmangr")
+        close_button.add_css_class("flat")
+        close_button.add_css_class("pacmangr-exit-button")
+        # Match the 30 px Pac-Man drawing area without enlarging the header bar.
+        close_button.set_size_request(30, 30)
+        script_dir = Path(__file__).resolve().parent
+        exit_icon_candidates = (
+            script_dir / "assets" / "pacmangr-exit.png",
+            script_dir / "pacmangr-exit.png",  # backward-compatible checkout
+            Path("/usr/share/pacmangr/assets/pacmangr-exit.png"),
+            Path("/usr/local/share/pacmangr/assets/pacmangr-exit.png"),
+        )
+        exit_icon_path = next(
+            (candidate for candidate in exit_icon_candidates if candidate.is_file()),
+            exit_icon_candidates[0],
+        )
+        if exit_icon_path.is_file():
+            # The PNG is pre-sized to 30 × 30 px and the picture is constrained
+            # to the same dimensions as the Pac-Man header logo.
+            exit_icon = Gtk.Picture.new_for_filename(str(exit_icon_path))
+            exit_icon.set_can_shrink(True)
+            exit_icon.set_content_fit(Gtk.ContentFit.CONTAIN)
+            exit_icon.set_size_request(30, 30)
+            close_button.set_child(exit_icon)
+        else:
+            # Keep the close action available if the artwork asset is missing.
+            close_button.set_icon_name("window-close-symbolic")
+        close_button.connect("clicked", lambda _button: self.window.close())
+        header.pack_end(close_button)
 
         brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         brand.append(PacmangrLogo(palette()))

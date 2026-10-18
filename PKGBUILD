@@ -24,11 +24,12 @@ optdepends=(
   'ruby: gem package support'
   'luarocks: Lua package support'
 )
-source=('pacmangr' 'pacmangr-gui' 'io.github.hei.pacmangr.desktop' 'io.github.hei.pacmangr.png' 'LICENSE')
+source=('pacmangr' 'pacmangr-gui' 'io.github.hei.pacmangr.desktop' 'assets/io.github.hei.pacmangr.png' 'assets/pacmangr-exit.png' 'LICENSE')
 sha256sums=('9d39d7b3eef3455f5f88bccd5a93f65e0b63ac861f73402c1e8deb6537c7df43'
-            '0be13eec91510c2f58ac3d7677e47c29d85e4c16248667a67f2ceb083ed3ba92'
+            '318af206c8327bc6e46ca5964575e7ce124c71420f524b3df605e88c8bef93fa'
             'df2610de7d8939e42d20fed92a9ec3c99f4f154279374960b1075a0bff462fca'
             'a891e45191eae6d054fce2b4b1ba53eb55f936d60d51a492c6e37366784120cc'
+            'ef343d476a87654b8b561b470687babb6b9721203ee7327bf5d8e95cfd13d94a'
             '1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c')
 
 package() {
@@ -36,5 +37,6 @@ package() {
   install -Dm755 pacmangr-gui "$pkgdir/usr/bin/pacmangr-gui"
   install -Dm644 io.github.hei.pacmangr.desktop "$pkgdir/usr/share/applications/io.github.hei.pacmangr.desktop"
   install -Dm644 io.github.hei.pacmangr.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.hei.pacmangr.png"
+  install -Dm644 pacmangr-exit.png "$pkgdir/usr/share/pacmangr/assets/pacmangr-exit.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

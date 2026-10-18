@@ -27,12 +27,14 @@ pkgbase = pacmangr
 	source = pacmangr
 	source = pacmangr-gui
 	source = io.github.hei.pacmangr.desktop
-	source = io.github.hei.pacmangr.png
+	source = assets/io.github.hei.pacmangr.png
+	source = assets/pacmangr-exit.png
 	source = LICENSE
 	sha256sums = 9d39d7b3eef3455f5f88bccd5a93f65e0b63ac861f73402c1e8deb6537c7df43
-	sha256sums = 0be13eec91510c2f58ac3d7677e47c29d85e4c16248667a67f2ceb083ed3ba92
+	sha256sums = 318af206c8327bc6e46ca5964575e7ce124c71420f524b3df605e88c8bef93fa
 	sha256sums = df2610de7d8939e42d20fed92a9ec3c99f4f154279374960b1075a0bff462fca
 	sha256sums = a891e45191eae6d054fce2b4b1ba53eb55f936d60d51a492c6e37366784120cc
+	sha256sums = ef343d476a87654b8b561b470687babb6b9721203ee7327bf5d8e95cfd13d94a
 	sha256sums = 1ca94f060630018611d08b440c3e9c2b5e58fd75d967845f60fb327e0a75ef9c
 
 pkgname = pacmangr
