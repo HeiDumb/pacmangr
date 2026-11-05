@@ -20,6 +20,8 @@ import sys
 import termios
 import threading
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import gi
@@ -41,9 +43,82 @@ def load_core():
     return module
 
 
+SETTINGS_PATH = Path.home() / ".config/pacmangr/gui_settings.json"
+CURRENT_CSS_PROVIDER: Gtk.CssProvider | None = None
+
+
+class SettingsManager:
+    """Manages persistent user preferences for pacmangr-gui."""
+
+    DEFAULTS = {
+        "default_view": "browse",  # "browse" or "installed"
+        "max_results": 250,
+        "confirm_actions": True,
+        "aur_helper": "auto",  # "auto", "yay", "paru", "disabled"
+        "pip_scope": "venv",  # "venv", "user", "system"
+        "preferred_terminal": "auto",
+        "pacman_animation": True,
+        "theme_accent": "auto",  # "auto", "gold", "cyan", "purple", "green", "coral"
+        "compact_rows": False,
+        "show_descriptions": True,
+        "check_updates_on_launch": False,
+        "sort_mode": "relevance",  # "relevance", "name", "source", "installed"
+        "last_source": "all",
+        "last_installed_source": "all",
+        "window_width": 1180,
+        "window_height": 760,
+        "window_maximized": False,
+    }
+
+    def __init__(self, path: Path = SETTINGS_PATH) -> None:
+        self.path = path
+        self.data = dict(self.DEFAULTS)
+        self.load()
+
+    def load(self) -> None:
+        if self.path.is_file():
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    self.data.update(raw)
+            except Exception:
+                pass
+
+    def save(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def get(self, key: str, default=None):
+        return self.data.get(key, default if default is not None else self.DEFAULTS.get(key))
+
+    def set(self, key: str, value) -> None:
+        self.data[key] = value
+        self.save()
+
+
+SETTINGS = SettingsManager()
+
+ACCENT_PRESETS = {
+    "gold": {"primary": "ffbe0b", "on_primary": "211a00"},
+    "cyan": {"primary": "00e5ff", "on_primary": "00363d"},
+    "purple": {"primary": "bd93f9", "on_primary": "28164b"},
+    "green": {"primary": "50fa7b", "on_primary": "003914"},
+    "coral": {"primary": "ff79c6", "on_primary": "49002a"},
+}
+
+
 CORE = load_core()
 APP_ID = "io.github.hei.pacmangr"
 MAX_GUI_RESULTS = 250
+SORT_CHOICES = (
+    ("Relevance", "relevance"),
+    ("Name", "name"),
+    ("Source", "source"),
+    ("Installed first", "installed"),
+)
 SCHEME_PATH = Path.home() / ".local/state/heilios/scheme.json"
 
 
@@ -148,6 +223,7 @@ def source_choices(tools) -> list[tuple[str, str]]:
         ("APT", "apt", tools.apt_cache),
         ("Snap", "snap", tools.snap),
         ("Git repository", "git", getattr(tools, "git", None)),
+        ("GitHub", "github", True),
     )
     choices.extend((label, key) for label, key, path in known if path)
     for manager in tools.extra_managers:
@@ -192,8 +268,9 @@ def palette() -> dict[str, str]:
     try:
         colours = json.loads(SCHEME_PATH.read_text(encoding="utf-8")).get("colours", {})
     except (OSError, ValueError, TypeError):
-        return defaults
-    return {
+        colours = {}
+
+    p = {
         "background": colours.get("background", defaults["background"]),
         "surface": colours.get("surfaceContainer", defaults["surface"]),
         "surface_high": colours.get("surfaceContainerHighest", defaults["surface_high"]),
@@ -206,9 +283,21 @@ def palette() -> dict[str, str]:
         "error": colours.get("error", defaults["error"]),
     }
 
+    accent = SETTINGS.get("theme_accent", "auto")
+    if accent in ACCENT_PRESETS:
+        p["primary"] = ACCENT_PRESETS[accent]["primary"]
+        p["on_primary"] = ACCENT_PRESETS[accent]["on_primary"]
 
-def install_css() -> None:
-    c = palette()
+    return p
+
+
+def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None = None) -> None:
+    global CURRENT_CSS_PROVIDER
+    c = palette_dict or palette()
+    is_compact = compact if compact is not None else bool(SETTINGS.get("compact_rows", False))
+    row_margin_v = "1px" if is_compact else "3px"
+    row_pad_v = "6px" if is_compact else "10px"
+
     css = f"""
     window {{
         background: alpha(#{c['background']}, 0.96);
@@ -257,11 +346,11 @@ def install_css() -> None:
         font-weight: 800;
     }}
     searchentry {{
-        min-height: 46px;
+        min-height: 44px;
         border-radius: 12px;
         background: #{c['surface_high']};
         border: 1px solid #{c['outline']};
-        font-size: 16px;
+        font-size: 15px;
     }}
     button {{
         border-radius: 10px;
@@ -270,6 +359,56 @@ def install_css() -> None:
     button.suggested-action {{
         background: #{c['primary']};
         color: #{c['on_primary']};
+        font-weight: 700;
+    }}
+    button.suggested-action:hover {{
+        background: alpha(#{c['primary']}, 0.85);
+    }}
+    button.tab-btn {{
+        border-radius: 10px;
+        padding: 4px 14px;
+        font-weight: 650;
+        border: 1px solid alpha(#{c['outline']}, 0.6);
+        background: alpha(#{c['surface_high']}, 0.6);
+        color: #{c['muted']};
+    }}
+    button.tab-btn.active {{
+        background: #{c['primary']};
+        color: #{c['on_primary']};
+        border-color: #{c['primary']};
+    }}
+    .mode-switcher {{
+        background: alpha(#{c['surface_high']}, 0.76);
+        border: 1px solid alpha(#{c['outline']}, 0.7);
+        border-radius: 14px;
+        padding: 3px;
+    }}
+    .mode-switcher button.mode-button {{
+        min-height: 38px;
+        border: 1px solid transparent;
+        border-radius: 11px;
+        padding: 5px 20px;
+        background: transparent;
+        color: #{c['muted']};
+        font-weight: 650;
+    }}
+    .mode-switcher button.mode-button.active {{
+        background: #{c['primary']};
+        color: #{c['on_primary']};
+    }}
+    button.filter-chip {{
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        background: alpha(#{c['surface_high']}, 0.8);
+        border: 1px solid alpha(#{c['outline']}, 0.7);
+        color: #{c['muted']};
+    }}
+    button.filter-chip.active {{
+        background: alpha(#{c['primary']}, 0.22);
+        border-color: #{c['primary']};
+        color: #{c['primary']};
     }}
     list {{
         background: transparent;
@@ -278,7 +417,7 @@ def install_css() -> None:
         background: alpha(#{c['surface_high']}, 0.58);
         border: 1px solid transparent;
         border-radius: 12px;
-        margin: 3px 8px;
+        margin: {row_margin_v} 8px;
     }}
     row.package-row:hover {{
         background: alpha(#{c['primary']}, 0.13);
@@ -287,6 +426,12 @@ def install_css() -> None:
     row.package-row:selected {{
         background: alpha(#{c['primary']}, 0.18);
         border-color: #{c['primary']};
+    }}
+    .package-row-box {{
+        padding: {row_pad_v} 12px;
+    }}
+    .package-row-box.compact {{
+        padding: 4px 12px;
     }}
     .package-name {{
         font-weight: 750;
@@ -304,8 +449,24 @@ def install_css() -> None:
         background: alpha(#{c['success']}, 0.16);
         color: #{c['success']};
     }}
+    .orphan-pill {{
+        background: alpha(#{c['error']}, 0.20);
+        color: #{c['error']};
+    }}
+    .explicit-pill {{
+        background: alpha(#{c['primary']}, 0.22);
+        color: #{c['primary']};
+    }}
     .danger {{
         color: #{c['error']};
+    }}
+    button.danger {{
+        background: alpha(#{c['error']}, 0.18);
+        color: #{c['error']};
+        border-color: alpha(#{c['error']}, 0.5);
+    }}
+    button.danger:hover {{
+        background: alpha(#{c['error']}, 0.32);
     }}
     progressbar trough {{
         min-height: 8px;
@@ -326,17 +487,24 @@ def install_css() -> None:
     textview, textview text {{
         background: alpha(#{c['surface']}, 0.90);
         color: #{c['muted']};
+        font-family: monospace;
     }}
     """
-    provider = Gtk.CssProvider()
-    provider.load_from_data(css)
     display = Gdk.Display.get_default()
     if display:
+        if CURRENT_CSS_PROVIDER:
+            try:
+                Gtk.StyleContext.remove_provider_for_display(display, CURRENT_CSS_PROVIDER)
+            except Exception:
+                pass
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
         Gtk.StyleContext.add_provider_for_display(
             display,
             provider,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
+        CURRENT_CSS_PROVIDER = provider
 
 
 def hex_rgb(value: str, fallback: str = "ffffff") -> tuple[float, float, float]:
@@ -599,18 +767,17 @@ class PacmangrLogo(Gtk.DrawingArea):
 
 
 class PackageRow(Gtk.ListBoxRow):
-    def __init__(self, item) -> None:
+    def __init__(self, item, *, compact: bool = False) -> None:
         super().__init__()
         self.item = item
         self.add_css_class("package-row")
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2 if compact else 4)
+        box.add_css_class("package-row-box")
+        if compact:
+            box.add_css_class("compact")
 
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         name = Gtk.Label(label=item.title(), xalign=0)
         name.set_hexpand(True)
         name.set_ellipsize(3)
@@ -620,7 +787,19 @@ class PackageRow(Gtk.ListBoxRow):
         source = Gtk.Label(label=item.source)
         source.add_css_class("pill")
         top.append(source)
-        if item.installed:
+
+        if getattr(item, "is_orphan", False):
+            orphan_pill = Gtk.Label(label="orphan")
+            orphan_pill.add_css_class("pill")
+            orphan_pill.add_css_class("orphan-pill")
+            top.append(orphan_pill)
+        elif getattr(item, "install_reason", "") == "explicit":
+            exp_pill = Gtk.Label(label="explicit")
+            exp_pill.add_css_class("pill")
+            exp_pill.add_css_class("explicit-pill")
+            top.append(exp_pill)
+
+        if item.installed and not compact:
             installed = Gtk.Label(label="installed")
             installed.add_css_class("pill")
             installed.add_css_class("installed-pill")
@@ -635,13 +814,230 @@ class PackageRow(Gtk.ListBoxRow):
         meta.add_css_class("muted")
         box.append(meta)
 
-        if item.description:
+        if item.description and not compact:
             desc = Gtk.Label(label=item.description, xalign=0)
             desc.set_ellipsize(3)
             desc.add_css_class("muted")
             box.append(desc)
 
         self.set_child(box)
+
+
+class SettingsDialog(Gtk.Window):
+    """Preferences and configuration window for pacmangr."""
+
+    def __init__(self, app) -> None:
+        super().__init__(transient_for=app.window, modal=True)
+        self.app = app
+        self.set_title("Pacmangr Settings")
+        self.set_default_size(520, 480)
+        self.set_resizable(False)
+
+        header = Gtk.HeaderBar()
+        header.set_show_title_buttons(True)
+        header.set_title_widget(Gtk.Label(label="Settings", css_classes=["title-label"]))
+        self.set_titlebar(header)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.set_child(scroll)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+        scroll.set_child(box)
+
+        # --- General Section ---
+        box.append(self._make_section_header("GENERAL"))
+
+        # Default View
+        row_view, self.view_combo = self._make_dropdown_row(
+            "Default Startup Tab",
+            ["Install", "Installed Packages"],
+            0 if SETTINGS.get("default_view") == "browse" else 1,
+        )
+        box.append(row_view)
+
+        # Max Search Results
+        result_options = ["50", "100", "250", "500"]
+        curr_max = str(SETTINGS.get("max_results", 250))
+        max_idx = result_options.index(curr_max) if curr_max in result_options else 2
+        row_max, self.max_combo = self._make_dropdown_row(
+            "Maximum Search Results",
+            result_options,
+            max_idx,
+        )
+        box.append(row_max)
+
+        # Confirm actions
+        row_confirm, self.confirm_switch = self._make_switch_row(
+            "Confirm Package Actions",
+            "Show confirmation before running install, remove, or update",
+            bool(SETTINGS.get("confirm_actions", True)),
+        )
+        box.append(row_confirm)
+
+        # Check updates on startup
+        row_updates, self.updates_switch = self._make_switch_row(
+            "Check Updates On Launch",
+            "Automatically count upgradeable packages when pacmangr starts",
+            bool(SETTINGS.get("check_updates_on_launch", False)),
+        )
+        box.append(row_updates)
+
+        # --- Package Managers & Backends ---
+        box.append(self._make_section_header("PACKAGE BACKENDS"))
+
+        # AUR Helper
+        aur_opts = ["Auto-detect", "yay", "paru", "Disabled"]
+        curr_aur = SETTINGS.get("aur_helper", "auto")
+        aur_idx = 0 if curr_aur == "auto" else (1 if curr_aur == "yay" else (2 if curr_aur == "paru" else 3))
+        row_aur, self.aur_combo = self._make_dropdown_row(
+            "Preferred AUR Helper",
+            aur_opts,
+            aur_idx,
+        )
+        box.append(row_aur)
+
+        # Pip Scope
+        pip_opts = ["Virtualenv (isolated)", "User directory (--user)", "System (--break-system-packages)"]
+        curr_pip = SETTINGS.get("pip_scope", "venv")
+        pip_idx = 0 if curr_pip == "venv" else (1 if curr_pip == "user" else 2)
+        row_pip, self.pip_combo = self._make_dropdown_row(
+            "Default Pip Install Scope",
+            pip_opts,
+            pip_idx,
+        )
+        box.append(row_pip)
+
+        # Preferred Terminal
+        row_term, self.term_entry = self._make_entry_row(
+            "Preferred Terminal Emulator",
+            SETTINGS.get("preferred_terminal", "auto"),
+            "e.g. foot, kitty, alacritty, or auto",
+        )
+        box.append(row_term)
+
+        # --- Appearance ---
+        box.append(self._make_section_header("APPEARANCE"))
+
+        # Theme accent
+        acc_opts = ["Heilios Dynamic", "Pac-Man Gold", "Cyberpunk Cyan", "Neon Purple", "Emerald Green", "Sunset Coral"]
+        acc_keys = ["auto", "gold", "cyan", "purple", "green", "coral"]
+        curr_acc = SETTINGS.get("theme_accent", "auto")
+        acc_idx = acc_keys.index(curr_acc) if curr_acc in acc_keys else 0
+        row_acc, self.acc_combo = self._make_dropdown_row(
+            "Theme Accent Color",
+            acc_opts,
+            acc_idx,
+        )
+        box.append(row_acc)
+
+        # Pacman animation
+        row_anim, self.anim_switch = self._make_switch_row(
+            "Pac-Man Progress Animation",
+            "Show animated Pac-Man eating pellets during operations",
+            bool(SETTINGS.get("pacman_animation", True)),
+        )
+        box.append(row_anim)
+
+        # Compact list rows
+        row_comp, self.compact_switch = self._make_switch_row(
+            "Compact List Rows",
+            "Reduce row margins and padding to show more packages at once",
+            bool(SETTINGS.get("compact_rows", False)),
+        )
+        box.append(row_comp)
+
+        # Save Button
+        save_btn = Gtk.Button(label="Save & Apply Settings")
+        save_btn.add_css_class("suggested-action")
+        save_btn.set_margin_top(12)
+        save_btn.connect("clicked", self._on_save)
+        box.append(save_btn)
+
+    def _make_section_header(self, text: str) -> Gtk.Label:
+        lbl = Gtk.Label(label=text, xalign=0)
+        lbl.add_css_class("section-label")
+        lbl.set_margin_top(8)
+        return lbl
+
+    def _make_dropdown_row(self, title: str, options: list[str], selected: int):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        lbl = Gtk.Label(label=title, xalign=0, hexpand=True)
+        lbl.add_css_class("package-name")
+        dropdown = Gtk.DropDown.new_from_strings(options)
+        dropdown.set_selected(selected)
+        dropdown.set_size_request(180, -1)
+        row.append(lbl)
+        row.append(dropdown)
+        return row, dropdown
+
+    def _make_switch_row(self, title: str, subtitle: str, active: bool):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
+        lbl = Gtk.Label(label=title, xalign=0)
+        lbl.add_css_class("package-name")
+        sub = Gtk.Label(label=subtitle, xalign=0)
+        sub.add_css_class("muted")
+        sub.set_wrap(True)
+        vbox.append(lbl)
+        vbox.append(sub)
+        switch = Gtk.Switch()
+        switch.set_active(active)
+        switch.set_valign(Gtk.Align.CENTER)
+        row.append(vbox)
+        row.append(switch)
+        return row, switch
+
+    def _make_entry_row(self, title: str, value: str, placeholder: str):
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        lbl = Gtk.Label(label=title, xalign=0, hexpand=True)
+        lbl.add_css_class("package-name")
+        entry = Gtk.Entry()
+        entry.set_text(value)
+        entry.set_placeholder_text(placeholder)
+        entry.set_size_request(180, -1)
+        row.append(lbl)
+        row.append(entry)
+        return row, entry
+
+    def _on_save(self, _button) -> None:
+        view_val = "browse" if self.view_combo.get_selected() == 0 else "installed"
+        res_opts = [50, 100, 250, 500]
+        max_val = res_opts[self.max_combo.get_selected()]
+        confirm_val = self.confirm_switch.get_active()
+        updates_val = self.updates_switch.get_active()
+
+        aur_vals = ["auto", "yay", "paru", "disabled"]
+        aur_val = aur_vals[self.aur_combo.get_selected()]
+
+        pip_vals = ["venv", "user", "system"]
+        pip_val = pip_vals[self.pip_combo.get_selected()]
+
+        term_val = self.term_entry.get_text().strip() or "auto"
+
+        acc_keys = ["auto", "gold", "cyan", "purple", "green", "coral"]
+        acc_val = acc_keys[self.acc_combo.get_selected()]
+
+        anim_val = self.anim_switch.get_active()
+        compact_val = self.compact_switch.get_active()
+
+        SETTINGS.set("default_view", view_val)
+        SETTINGS.set("max_results", max_val)
+        SETTINGS.set("confirm_actions", confirm_val)
+        SETTINGS.set("check_updates_on_launch", updates_val)
+        SETTINGS.set("aur_helper", aur_val)
+        SETTINGS.set("pip_scope", pip_val)
+        SETTINGS.set("preferred_terminal", term_val)
+        SETTINGS.set("theme_accent", acc_val)
+        SETTINGS.set("pacman_animation", anim_val)
+        SETTINGS.set("compact_rows", compact_val)
+
+        self.app.apply_settings()
+        self.close()
 
 
 class PacmangrGUI(Gtk.Application):
@@ -655,7 +1051,6 @@ class PacmangrGUI(Gtk.Application):
         self.current_item = None
         self.sources = source_choices(self.tools)
         self.request_id = 0
-        self.view_mode = "search"
         self.operation_running = False
         self.package_activity: PacmanActivity | None = None
         self.operation_progress: Gtk.ProgressBar | None = None
@@ -666,10 +1061,24 @@ class PacmangrGUI(Gtk.Application):
         self.operation_speed = ""
         self.operation_eta = ""
 
+        # State separation: Browse vs Installed
+        self.view_mode = SETTINGS.get("default_view", "browse")
+        self.browse_items: list = []
+        self.browse_query: str = ""
+        self.installed_filter_query: str = ""
+        self.installed_kind_filter: str = "all"  # "all", "explicit", "dependency", "orphan"
+        self.all_installed: list = []
+        self.installed_items: list = []
+        self.orphans_set: set[str] = set()
+        self.explicit_set: set[str] = set()
+        self.deps_set: set[str] = set()
+        self.installed_loaded = False
+        self.view_switcher_pairs: list[tuple[Gtk.Button, Gtk.Button]] = []
+
     def do_activate(self) -> None:
         if self.window:
             self.window.present()
-            self.search_entry.grab_focus()
+            self._grab_search_focus()
             return
 
         ensure_graphical_auth_agent()
@@ -683,24 +1092,38 @@ class PacmangrGUI(Gtk.Application):
         self.build_header()
         self.build_content()
         self.window.present()
-        self.search_entry.grab_focus()
+
+        # Switch to configured default view
+        self.switch_view_mode(self.view_mode, initial=True)
+
+        if SETTINGS.get("check_updates_on_launch", False):
+            GLib.timeout_add(1500, self.check_updates_silently)
+
+    def apply_settings(self) -> None:
+        """Dynamically apply updated settings without restarting."""
+        install_css(palette(), SETTINGS.get("compact_rows", False))
+        if self.view_mode == "browse":
+            if self.browse_items:
+                self.show_items(self.browse_items, f"Results for “{self.browse_query}”", remember=False)
+        else:
+            self.filter_installed()
+        self.set_status("Settings applied.")
 
     def build_header(self) -> None:
         assert self.window
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(False)
 
-        # Use the Pacmangr exit artwork instead of a generic cross icon.
+        # Close button with Pac-Man exit icon
         close_button = Gtk.Button()
         close_button.set_tooltip_text("Close Pacmangr")
         close_button.add_css_class("flat")
         close_button.add_css_class("pacmangr-exit-button")
-        # Match the 30 px Pac-Man drawing area without enlarging the header bar.
         close_button.set_size_request(30, 30)
         script_dir = Path(__file__).resolve().parent
         exit_icon_candidates = (
             script_dir / "assets" / "pacmangr-exit.png",
-            script_dir / "pacmangr-exit.png",  # backward-compatible checkout
+            script_dir / "pacmangr-exit.png",
             Path("/usr/share/pacmangr/assets/pacmangr-exit.png"),
             Path("/usr/local/share/pacmangr/assets/pacmangr-exit.png"),
         )
@@ -709,19 +1132,27 @@ class PacmangrGUI(Gtk.Application):
             exit_icon_candidates[0],
         )
         if exit_icon_path.is_file():
-            # The PNG is pre-sized to 30 × 30 px and the picture is constrained
-            # to the same dimensions as the Pac-Man header logo.
             exit_icon = Gtk.Picture.new_for_filename(str(exit_icon_path))
             exit_icon.set_can_shrink(True)
             exit_icon.set_content_fit(Gtk.ContentFit.CONTAIN)
             exit_icon.set_size_request(30, 30)
             close_button.set_child(exit_icon)
         else:
-            # Keep the close action available if the artwork asset is missing.
             close_button.set_icon_name("window-close-symbolic")
         close_button.connect("clicked", lambda _button: self.window.close())
         header.pack_end(close_button)
 
+        # A named settings action is easier to discover than an unlabeled gear.
+        settings_button = Gtk.Button()
+        settings_content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
+        settings_content.append(Gtk.Image.new_from_icon_name("preferences-system-symbolic"))
+        settings_button.set_child(settings_content)
+        settings_button.set_tooltip_text("Settings (Ctrl+,)")
+        settings_button.add_css_class("flat")
+        settings_button.connect("clicked", lambda _button: self.open_settings_dialog())
+        header.pack_end(settings_button)
+
+        # Keep the titlebar focused on the app identity; views sit below it.
         brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         brand.append(PacmangrLogo(palette()))
         copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -740,11 +1171,48 @@ class PacmangrGUI(Gtk.Application):
         controller.connect("key-pressed", self.on_key_pressed)
         return controller
 
-    def on_key_pressed(self, _controller, keyval, _keycode, _state) -> bool:
+    def on_key_pressed(self, _controller, keyval, _keycode, state) -> bool:
         if keyval == Gdk.KEY_Escape and self.window:
             self.window.close()
             return True
+
+        # Ctrl+Comma -> Settings
+        if (state & Gdk.ModifierType.CONTROL_MASK) and (keyval in {Gdk.KEY_comma, Gdk.KEY_less}):
+            self.open_settings_dialog()
+            return True
+
+        # Ctrl+1 -> Browse, Ctrl+2 -> Installed
+        if (state & Gdk.ModifierType.CONTROL_MASK) and keyval == Gdk.KEY_1:
+            self.switch_view_mode("browse")
+            return True
+        if (state & Gdk.ModifierType.CONTROL_MASK) and keyval == Gdk.KEY_2:
+            self.switch_view_mode("installed")
+            return True
+
+        # Ctrl+F -> Focus active search bar
+        if (state & Gdk.ModifierType.CONTROL_MASK) and keyval in {Gdk.KEY_f, Gdk.KEY_F}:
+            self._grab_search_focus()
+            return True
+
+        # F5 -> Refresh
+        if keyval == Gdk.KEY_F5:
+            if self.view_mode == "installed":
+                self.load_installed(force=True)
+            elif self.browse_query:
+                self.on_search(None)
+            return True
+
         return False
+
+    def _grab_search_focus(self) -> None:
+        if self.view_mode == "browse" and hasattr(self, "search_entry"):
+            self.search_entry.grab_focus()
+        elif hasattr(self, "installed_filter_entry"):
+            self.installed_filter_entry.grab_focus()
+
+    def open_settings_dialog(self) -> None:
+        dialog = SettingsDialog(self)
+        dialog.present()
 
     def make_tools_button(self) -> Gtk.MenuButton:
         tools_button = Gtk.MenuButton(label="More")
@@ -754,9 +1222,14 @@ class PacmangrGUI(Gtk.Application):
         menu.set_margin_bottom(8)
         menu.set_margin_start(8)
         menu.set_margin_end(8)
+
         for label, callback in (
+            ("Settings", lambda _b: self.open_settings_dialog()),
+            ("Check system updates", lambda _b: self.check_updates_dialog()),
             ("Update all package sources", self.confirm_update_all),
-            ("Refresh installed packages", self.refresh_installed),
+            ("Clean orphan packages", lambda _b: self.confirm_clean_orphans()),
+            ("Refresh installed packages", lambda _b: self.load_installed(force=True)),
+            ("Export package list", lambda _b: self.export_package_list()),
             ("Package manager status", self.show_manager_status),
             ("Cache information", self.show_cache_status),
             ("Clear local cache", self.confirm_clear_cache),
@@ -768,6 +1241,24 @@ class PacmangrGUI(Gtk.Application):
         popover.set_child(menu)
         tools_button.set_popover(popover)
         return tools_button
+
+    def make_view_switcher(self) -> Gtk.Box:
+        switcher = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        switcher.add_css_class("mode-switcher")
+        browse = Gtk.Button(label="Browse & Install")
+        browse.add_css_class("mode-button")
+        browse.connect("clicked", lambda _button: self.switch_view_mode("browse"))
+        installed = Gtk.Button(label="Installed")
+        installed.add_css_class("mode-button")
+        installed.connect("clicked", lambda _button: self.switch_view_mode("installed"))
+        switcher.append(browse)
+        switcher.append(installed)
+        self.view_switcher_pairs.append((browse, installed))
+        if len(self.view_switcher_pairs) == 1:
+            self.tab_browse = browse
+            self.tab_installed = installed
+            self.installed_button = installed
+        return switcher
 
     def build_content(self) -> None:
         assert self.window
@@ -783,53 +1274,103 @@ class PacmangrGUI(Gtk.Application):
         toolbar.add_css_class("hero-card")
         toolbar.set_hexpand(True)
 
-        toolbar_inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
-        toolbar_inner.set_hexpand(True)
-        toolbar_inner.set_margin_top(10)
-        toolbar_inner.set_margin_bottom(10)
-        toolbar_inner.set_margin_start(10)
-        toolbar_inner.set_margin_end(10)
-        toolbar.append(toolbar_inner)
+        # --- BROWSE TOOLBAR INNER ---
+        self.browse_toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
+        self.browse_toolbar.set_hexpand(True)
+        self.browse_toolbar.set_margin_top(10)
+        self.browse_toolbar.set_margin_bottom(10)
+        self.browse_toolbar.set_margin_start(10)
+        self.browse_toolbar.set_margin_end(10)
 
-        search_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        browse_search_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.search_entry = Gtk.SearchEntry()
-        self.search_entry.set_placeholder_text("Search pacman, AUR, Flatpak, apt, language packages…")
+        self.search_entry.set_placeholder_text("Search packages, or find repositories on GitHub…")
         self.search_entry.set_hexpand(True)
         self.search_entry.connect("activate", self.on_search)
-        search_row.append(self.search_entry)
+        browse_search_row.append(self.search_entry)
 
         self.search_button = Gtk.Button(label="Search packages")
         self.search_button.set_size_request(150, -1)
         self.search_button.add_css_class("suggested-action")
         self.search_button.connect("clicked", self.on_search)
-        search_row.append(self.search_button)
-        toolbar_inner.append(search_row)
+        browse_search_row.append(self.search_button)
+        self.browse_toolbar.append(browse_search_row)
 
-        filter_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        browse_filter_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         filter_label = Gtk.Label(label="SOURCE", xalign=0)
         filter_label.add_css_class("section-label")
-        filter_row.append(filter_label)
+        browse_filter_row.append(filter_label)
+
         self.source_dropdown = Gtk.DropDown.new_from_strings([label for label, _key in self.sources])
         self.source_dropdown.set_tooltip_text("Choose which package source to search")
         self.source_dropdown.set_size_request(190, -1)
         self.source_dropdown.connect("notify::selected", self.on_source_changed)
-        filter_row.append(self.source_dropdown)
+        browse_filter_row.append(self.source_dropdown)
+        browse_filter_row.append(self.make_view_switcher())
 
-        self.installed_button = Gtk.ToggleButton(label="Installed packages")
-        self.installed_button.set_size_request(160, -1)
-        self.installed_button.connect("toggled", self.on_installed_toggled)
-        filter_row.append(self.installed_button)
+        browse_spacer = Gtk.Box()
+        browse_spacer.set_hexpand(True)
+        browse_filter_row.append(browse_spacer)
 
-        filter_spacer = Gtk.Box()
-        filter_spacer.set_hexpand(True)
-        filter_row.append(filter_spacer)
-        self.spinner = Gtk.Spinner()
-        self.spinner.set_size_request(28, 28)
-        filter_row.append(self.spinner)
-        filter_row.append(self.make_tools_button())
-        toolbar_inner.append(filter_row)
+        self.browse_spinner = Gtk.Spinner()
+        self.browse_spinner.set_size_request(28, 28)
+        browse_filter_row.append(self.browse_spinner)
+        browse_filter_row.append(self.make_tools_button())
+        self.browse_toolbar.append(browse_filter_row)
+        toolbar.append(self.browse_toolbar)
+
+        # --- INSTALLED TOOLBAR INNER ---
+        self.installed_toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=9)
+        self.installed_toolbar.set_hexpand(True)
+        self.installed_toolbar.set_margin_top(10)
+        self.installed_toolbar.set_margin_bottom(10)
+        self.installed_toolbar.set_margin_start(10)
+        self.installed_toolbar.set_margin_end(10)
+
+        inst_search_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.installed_filter_entry = Gtk.SearchEntry()
+        self.installed_filter_entry.set_placeholder_text("Filter installed packages by name, description, or tag…")
+        self.installed_filter_entry.set_hexpand(True)
+        self.installed_filter_entry.connect("search-changed", self.on_installed_filter_changed)
+        inst_search_row.append(self.installed_filter_entry)
+
+        self.installed_toolbar.append(inst_search_row)
+
+        inst_action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        inst_action_row.append(self.make_view_switcher())
+        src_label2 = Gtk.Label(label="SOURCE", xalign=0)
+        src_label2.add_css_class("section-label")
+        inst_action_row.append(src_label2)
+
+        self.installed_source_dropdown = Gtk.DropDown.new_from_strings([label for label, _key in self.sources])
+        self.installed_source_dropdown.set_size_request(150, -1)
+        self.installed_source_dropdown.connect("notify::selected", lambda _d, _p: self.filter_installed())
+        inst_action_row.append(self.installed_source_dropdown)
+        self.installed_kind_dropdown = Gtk.DropDown.new_from_strings(
+            ["All packages", "Explicitly installed", "Dependencies", "Orphans"]
+        )
+        self.installed_kind_dropdown.set_tooltip_text("Filter installed packages by install reason")
+        self.installed_kind_dropdown.set_size_request(150, -1)
+        self.installed_kind_dropdown.connect("notify::selected", self.on_installed_kind_changed)
+        inst_action_row.append(self.installed_kind_dropdown)
+
+        inst_spacer = Gtk.Box()
+        inst_spacer.set_hexpand(True)
+        inst_action_row.append(inst_spacer)
+        inst_action_row.append(self.make_tools_button())
+
+        self.installed_spinner = Gtk.Spinner()
+        self.installed_spinner.set_size_request(28, 28)
+        inst_action_row.append(self.installed_spinner)
+        self.installed_toolbar.append(inst_action_row)
+
+        toolbar.append(self.installed_toolbar)
         root.append(toolbar)
 
+        # Compatibility reference
+        self.spinner = self.browse_spinner
+
+        # --- CONTENT ROW (List + Detail) ---
         content_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         content_row.set_vexpand(True)
 
@@ -854,17 +1395,19 @@ class PacmangrGUI(Gtk.Application):
         list_card.append(scroller)
         content_row.append(list_card)
 
-        detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        # --- DETAIL CARD ---
+        detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         detail.add_css_class("detail-card")
-        detail.set_size_request(410, -1)
+        detail.set_size_request(420, -1)
         detail.set_vexpand(True)
+        self.detail_card = detail
 
         self.detail_name = Gtk.Label(label="Select a package", xalign=0)
         self.detail_name.set_wrap(True)
         self.detail_name.set_halign(Gtk.Align.CENTER)
         self.detail_name.set_xalign(0.5)
         self.detail_name.add_css_class("title-label")
-        self.detail_name.set_margin_top(150)
+        self.detail_name.set_margin_top(140)
         self.detail_name.set_margin_start(18)
         self.detail_name.set_margin_end(18)
         detail.append(self.detail_name)
@@ -892,45 +1435,72 @@ class PacmangrGUI(Gtk.Application):
         detail_scroller.set_child(self.detail_text)
         detail.append(detail_scroller)
 
+        # Actions Grid
         actions = Gtk.Grid(column_spacing=8, row_spacing=8)
         actions.set_margin_start(18)
         actions.set_margin_end(18)
         actions.set_margin_bottom(18)
         actions.set_visible(False)
         self.detail_actions = actions
+
+        # Row 0: Info, Versions, Files, Copy Name
         self.info_button = Gtk.Button(label="Details")
         self.info_button.set_sensitive(False)
         self.info_button.connect("clicked", self.on_info)
         self.info_button.set_hexpand(True)
         actions.attach(self.info_button, 0, 0, 1, 1)
+
         self.versions_button = Gtk.Button(label="Versions")
         self.versions_button.set_sensitive(False)
         self.versions_button.connect("clicked", self.on_versions)
         self.versions_button.set_hexpand(True)
         actions.attach(self.versions_button, 1, 0, 1, 1)
+
+        self.files_button = Gtk.Button(label="Files")
+        self.files_button.set_sensitive(False)
+        self.files_button.connect("clicked", self.on_package_files)
+        self.files_button.set_hexpand(True)
+        actions.attach(self.files_button, 2, 0, 1, 1)
+
+        self.copy_button = Gtk.Button(label="Copy Name")
+        self.copy_button.set_sensitive(False)
+        self.copy_button.connect("clicked", self.on_copy_name)
+        self.copy_button.set_hexpand(True)
+        actions.attach(self.copy_button, 3, 0, 1, 1)
+
+        # Row 1: Install/Reinstall, Remove, Website
         self.install_button = Gtk.Button(label="Install")
         self.install_button.add_css_class("suggested-action")
         self.install_button.set_sensitive(False)
         self.install_button.connect("clicked", lambda _button: self.confirm_action("install"))
         self.install_button.set_hexpand(True)
-        actions.attach(self.install_button, 0, 1, 1, 1)
+        actions.attach(self.install_button, 0, 1, 2, 1)
+
         self.remove_button = Gtk.Button(label="Remove")
         self.remove_button.add_css_class("danger")
         self.remove_button.set_sensitive(False)
         self.remove_button.connect("clicked", lambda _button: self.confirm_action("remove"))
         self.remove_button.set_hexpand(True)
-        actions.attach(self.remove_button, 1, 1, 1, 1)
+        actions.attach(self.remove_button, 2, 1, 1, 1)
+
+        self.website_button = Gtk.Button(label="Website")
+        self.website_button.set_sensitive(False)
+        self.website_button.connect("clicked", self.on_open_website)
+        self.website_button.set_hexpand(True)
+        actions.attach(self.website_button, 3, 1, 1, 1)
+
         detail.append(actions)
         content_row.append(detail)
-
         root.append(content_row)
 
+        # --- STATUS BAR ---
         status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         status_box.add_css_class("status-card")
         self.package_activity = PacmanActivity(palette())
         self.package_activity.set_margin_start(10)
         self.package_activity.set_valign(Gtk.Align.CENTER)
         status_box.append(self.package_activity)
+
         status_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         status_content.set_hexpand(True)
         self.status_label = Gtk.Label(
@@ -944,6 +1514,7 @@ class PacmangrGUI(Gtk.Application):
         self.status_label.set_margin_start(12)
         self.status_label.set_margin_end(12)
         status_content.append(self.status_label)
+
         self.operation_progress = Gtk.ProgressBar()
         self.operation_progress.set_show_text(True)
         self.operation_progress.set_hexpand(True)
@@ -956,6 +1527,395 @@ class PacmangrGUI(Gtk.Application):
         root.append(status_box)
 
         self.window.set_child(root)
+
+    def switch_view_mode(self, mode: str, initial: bool = False) -> None:
+        """Switch between 'browse' (to install) and 'installed' modes."""
+        self.view_mode = mode
+        for browse, installed in self.view_switcher_pairs:
+            browse.add_css_class("active" if mode == "browse" else "inactive")
+            browse.remove_css_class("inactive" if mode == "browse" else "active")
+            installed.add_css_class("active" if mode == "installed" else "inactive")
+            installed.remove_css_class("inactive" if mode == "installed" else "active")
+        if mode == "browse":
+            self.browse_toolbar.set_visible(True)
+            self.installed_toolbar.set_visible(False)
+            self.spinner = self.browse_spinner
+            if self.browse_items:
+                self.show_items(self.browse_items, f"Results for “{self.browse_query}”", remember=False)
+            elif not initial:
+                self.clear_rows()
+                self.result_heading.set_text("Search for packages")
+                self.set_status("Ready · type a package name above to search.")
+            self.search_entry.grab_focus()
+        else:
+            self.browse_toolbar.set_visible(False)
+            self.installed_toolbar.set_visible(True)
+            self.spinner = self.installed_spinner
+            if not self.installed_loaded:
+                self.load_installed()
+            else:
+                self.filter_installed()
+            self.installed_filter_entry.grab_focus()
+
+    def set_installed_kind_filter(self, kind: str) -> None:
+        self.installed_kind_filter = kind
+        kinds = ("all", "explicit", "dependency", "orphan")
+        if hasattr(self, "installed_kind_dropdown") and kind in kinds:
+            self.installed_kind_dropdown.set_selected(kinds.index(kind))
+        self.filter_installed()
+
+    def on_installed_kind_changed(self, dropdown, _param) -> None:
+        kinds = ("all", "explicit", "dependency", "orphan")
+        selected = min(dropdown.get_selected(), len(kinds) - 1)
+        self.installed_kind_filter = kinds[selected]
+        self.filter_installed()
+
+    def on_installed_filter_changed(self, entry: Gtk.SearchEntry) -> None:
+        self.installed_filter_query = entry.get_text().strip().lower()
+        self.filter_installed()
+
+    def filter_installed(self) -> None:
+        if not self.all_installed:
+            return
+
+        query = self.installed_filter_query
+        kind = self.installed_kind_filter
+        selected_src_idx = min(self.installed_source_dropdown.get_selected(), len(self.sources) - 1)
+        source = self.sources[selected_src_idx][1]
+
+        filtered = []
+        for item in self.all_installed:
+            if source != "all" and not self.source_matches(item, source):
+                continue
+
+            # Kind matching
+            if kind == "orphan" and not getattr(item, "is_orphan", False):
+                continue
+            if kind == "explicit" and getattr(item, "install_reason", "") != "explicit":
+                continue
+            if kind == "dependency" and getattr(item, "install_reason", "") != "dependency":
+                continue
+
+            # Query matching
+            if query:
+                haystack = f"{item.name} {item.package_id} {item.description or ''}".lower()
+                if query not in haystack:
+                    continue
+
+            filtered.append(item)
+
+        self.installed_items = filtered
+        label = self.sources[selected_src_idx][0]
+        heading_parts = ["Installed packages"]
+        if source != "all":
+            heading_parts.append(f"from {label}")
+        if kind != "all":
+            heading_parts.append(f"({kind} only)")
+        heading = " · ".join(heading_parts)
+
+        self.show_items(filtered, heading, remember=False)
+        self.set_status(f"{len(filtered)} installed packages matching filter.")
+
+    def load_installed(self, force: bool = False) -> None:
+        self.set_status("Scanning installed packages…", busy=True)
+        cached = self.cache.load_installed() if not force else None
+        if cached:
+            self._apply_installed_data(cached)
+
+        def worker() -> None:
+            try:
+                # Classify arch packages
+                explicit = set()
+                deps = set()
+                orphans = set()
+                try:
+                    if shutil.which("pacman"):
+                        out_exp = subprocess.check_output(["pacman", "-Qeq"], text=True, stderr=subprocess.DEVNULL)
+                        explicit = {line.strip() for line in out_exp.splitlines() if line.strip()}
+                        out_dep = subprocess.check_output(["pacman", "-Qdq"], text=True, stderr=subprocess.DEVNULL)
+                        deps = {line.strip() for line in out_dep.splitlines() if line.strip()}
+                        out_orph = subprocess.check_output(["pacman", "-Qtdq"], text=True, stderr=subprocess.DEVNULL)
+                        orphans = {line.strip() for line in out_orph.splitlines() if line.strip()}
+                except Exception:
+                    pass
+
+                items = CORE.collect_installed_packages(self.tools)
+                for item in items:
+                    name = item.name
+                    if name in orphans:
+                        item.is_orphan = True
+                        item.install_reason = "orphan"
+                    elif name in explicit:
+                        item.is_orphan = False
+                        item.install_reason = "explicit"
+                    elif name in deps:
+                        item.is_orphan = False
+                        item.install_reason = "dependency"
+                    else:
+                        item.is_orphan = False
+                        item.install_reason = "unknown"
+
+                self.cache.save_installed(items)
+                GLib.idle_add(self._finish_load_installed, items, explicit, deps, orphans, "")
+            except Exception as exc:
+                GLib.idle_add(self._finish_load_installed, [], set(), set(), set(), str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_installed_data(self, items: list) -> None:
+        self.all_installed = list(items)
+        self.installed_loaded = True
+        self.filter_installed()
+
+    def _finish_load_installed(self, items: list, explicit: set, deps: set, orphans: set, error: str) -> bool:
+        if error:
+            self.set_status(f"Installed packages scan failed: {error}")
+            return False
+
+        self.explicit_set = explicit
+        self.deps_set = deps
+        self.orphans_set = orphans
+        self.all_installed = items
+        self.installed_loaded = True
+
+        self.filter_installed()
+        return False
+
+    def confirm_clean_orphans(self) -> None:
+        if not self.orphans_set:
+            self.set_status("No orphan packages detected.")
+            return
+
+        orphan_list = sorted(self.orphans_set)
+        detail = (
+            f"The following {len(orphan_list)} unused packages will be safely removed:\n\n"
+            + "\n".join(f"• {pkg}" for pkg in orphan_list[:30])
+        )
+        if len(orphan_list) > 30:
+            detail += f"\n...and {len(orphan_list) - 30} more."
+
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(f"Remove {len(orphan_list)} orphaned packages?")
+        dialog.set_detail(detail)
+        dialog.set_buttons(["Cancel", "Remove Orphans"])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(1)
+
+        def finished(alert: Gtk.AlertDialog, result) -> None:
+            try:
+                response = alert.choose_finish(result)
+            except GLib.Error:
+                return
+            if response == 1:
+                cmd = ["/usr/bin/sudo", "/usr/bin/pacman", "-Rns", *orphan_list]
+                self.launch_raw_operation("Remove orphans", cmd, on_done=lambda: self.load_installed(force=True))
+
+        dialog.choose(self.window, None, finished)
+
+    def check_updates_silently(self) -> bool:
+        def worker() -> None:
+            count = self._run_checkupdates()
+            if count > 0:
+                GLib.idle_add(self.set_status, f"🔔 {count} package updates are available.")
+        threading.Thread(target=worker, daemon=True).start()
+        return GLib.SOURCE_REMOVE
+
+    def check_updates_dialog(self) -> None:
+        self.set_status("Checking for updates…", busy=True)
+
+        def worker() -> None:
+            lines = self._get_checkupdates_lines()
+            GLib.idle_add(self._show_updates_dialog, lines)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_checkupdates(self) -> int:
+        try:
+            if shutil.which("checkupdates"):
+                out = subprocess.check_output(["checkupdates"], text=True, timeout=25, stderr=subprocess.DEVNULL)
+                return len([l for l in out.splitlines() if l.strip()])
+        except Exception:
+            pass
+        return 0
+
+    def _get_checkupdates_lines(self) -> list[str]:
+        try:
+            if shutil.which("checkupdates"):
+                out = subprocess.check_output(["checkupdates"], text=True, timeout=25, stderr=subprocess.DEVNULL)
+                return [l.strip() for l in out.splitlines() if l.strip()]
+        except Exception:
+            pass
+        return []
+
+    def _show_updates_dialog(self, lines: list[str]) -> bool:
+        self.set_status("Update check completed.")
+        if not lines:
+            self.show_text_dialog("System Up to Date", "All packages are up to date! No updates available.")
+            return False
+
+        detail = f"{len(lines)} updates available:\n\n" + "\n".join(lines[:40])
+        if len(lines) > 40:
+            detail += f"\n...and {len(lines) - 40} more."
+
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(f"{len(lines)} Package Updates Available")
+        dialog.set_detail(detail)
+        dialog.set_buttons(["Later", "Update All Packages"])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(1)
+
+        def finished(alert: Gtk.AlertDialog, result) -> None:
+            try:
+                response = alert.choose_finish(result)
+            except GLib.Error:
+                return
+            if response == 1:
+                self.confirm_update_all(None)
+
+        dialog.choose(self.window, None, finished)
+        return False
+
+    def export_package_list(self) -> None:
+        if not self.all_installed:
+            self.set_status("No installed packages loaded to export.")
+            return
+
+        export_path = Path.home() / "pacmangr-installed-packages.txt"
+        try:
+            lines = [
+                f"# pacmangr package export - {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"# Total packages: {len(self.all_installed)}",
+                "",
+            ]
+            for item in sorted(self.all_installed, key=lambda x: x.name):
+                reason = f" [{item.install_reason}]" if hasattr(item, "install_reason") else ""
+                lines.append(f"{item.name} {item.version} ({item.source}){reason}")
+            export_path.write_text("\n".join(lines), encoding="utf-8")
+            self.set_status(f"Exported package list to {export_path}")
+            self.show_text_dialog(
+                "Export Successful",
+                f"Exported {len(self.all_installed)} installed packages to:\n{export_path}",
+            )
+        except Exception as exc:
+            self.set_status(f"Export failed: {exc}")
+
+    def on_package_files(self, _button) -> None:
+        item = self.current_item
+        if not item:
+            return
+
+        self.set_status(f"Listing installed files for {item.title()}…", busy=True)
+
+        def worker() -> None:
+            try:
+                if shutil.which("pacman") and item.source in {"pacman", "aur", "aur/local"}:
+                    out = subprocess.check_output(["pacman", "-Ql", item.name], text=True, stderr=subprocess.STDOUT)
+                else:
+                    out = f"File listing is not supported for {item.source} packages."
+                GLib.idle_add(self._finish_package_files, item, out)
+            except subprocess.CalledProcessError as err:
+                GLib.idle_add(self._finish_package_files, item, f"Could not list files: {err.output}")
+            except Exception as exc:
+                GLib.idle_add(self._finish_package_files, item, f"Error: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_package_files(self, item, output: str) -> bool:
+        if self.current_item is not item:
+            return False
+        self.detail_text.get_buffer().set_text(output.strip() or "No files found.")
+        self.set_status(f"Loaded files for {item.title()}.")
+        return False
+
+    def on_copy_name(self, _button) -> None:
+        if not self.current_item:
+            return
+        name = self.current_item.name
+        display = Gdk.Display.get_default()
+        if display:
+            display.get_clipboard().set(name)
+            self.set_status(f"Copied '{name}' to clipboard.")
+
+    def on_open_website(self, _button) -> None:
+        item = self.current_item
+        if not item or not self.window:
+            return
+
+        def worker() -> None:
+            url = ""
+            if item.origin and (item.origin.startswith("http://") or item.origin.startswith("https://")):
+                url = item.origin
+            elif shutil.which("pacman") and item.source in {"pacman", "aur", "aur/local"}:
+                try:
+                    out = subprocess.check_output(["pacman", "-Qi", item.name], text=True, stderr=subprocess.DEVNULL)
+                    for line in out.splitlines():
+                        if line.startswith("URL"):
+                            parts = line.split(":", 1)
+                            if len(parts) > 1:
+                                url = parts[1].strip()
+                                break
+                except Exception:
+                    pass
+
+            if not url:
+                if item.source in {"aur", "aur/local"}:
+                    url = f"https://aur.archlinux.org/packages/{item.name}"
+                else:
+                    url = f"https://archlinux.org/packages/?q={item.name}"
+
+            GLib.idle_add(self._launch_url, url)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _launch_url(self, url: str) -> bool:
+        if url:
+            Gtk.show_uri(self.window, url, Gdk.CURRENT_TIME)
+            self.set_status(f"Opened {url}")
+        return False
+
+    def launch_raw_operation(self, title: str, cmd: list[str], on_done=None) -> None:
+        if self.operation_running:
+            self.set_status("Another package operation is already running.")
+            return
+
+        try:
+            argv = prepare_gui_operation(cmd, self.tools, "remove", shutil.which("pkexec"))
+        except RuntimeError as exc:
+            self.set_status(str(exc))
+            return
+
+        self.operation_running = True
+        if self.package_activity:
+            self.package_activity.start("remove")
+        self.start_operation_progress()
+        self.set_status(f"{title} in progress…", busy=True)
+
+        def worker() -> None:
+            env = os.environ.copy()
+            env.update({"DEBIAN_FRONTEND": "noninteractive", "LC_ALL": "C"})
+            try:
+                code, output = run_streamed_operation(
+                    argv,
+                    env=env,
+                    on_line=lambda line: GLib.idle_add(self.update_operation_progress, line),
+                )
+            except OSError as exc:
+                code, output = 126, str(exc)
+
+            def done() -> bool:
+                self.operation_running = False
+                if self.package_activity:
+                    self.package_activity.stop()
+                self.stop_operation_progress()
+                self.detail_text.get_buffer().set_text(output or "Operation completed.")
+                self.set_status(f"{title} completed." if code == 0 else f"{title} failed with code {code}.")
+                if on_done and code == 0:
+                    on_done()
+                return False
+
+            GLib.idle_add(done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def set_status(self, text: str, busy: bool = False) -> None:
         self.status_label.set_text(text)
@@ -1057,47 +2017,53 @@ class PacmangrGUI(Gtk.Application):
         if not hasattr(self, "search_entry"):
             return
         self.search_entry.set_placeholder_text(
-            "Paste an HTTPS, SSH, or git@ repository URL"
+            "Search GitHub repositories by name, topic, or description"
+            if self.selected_source() == "github"
+            else "Paste an HTTPS, SSH, or git@ repository URL"
             if self.selected_source() == "git"
-            else "Search pacman, AUR, Flatpak, apt, language packages…"
+            else "Search packages across your enabled sources…"
         )
-        if self.view_mode == "installed" and self.raw_items:
-            source = self.selected_source()
-            filtered = [item for item in self.raw_items if self.source_matches(item, source)]
-            label = self.sources[self.source_dropdown.get_selected()][0]
-            self.show_items(filtered, f"Installed · {label}", remember=False)
-            self.set_status(f"{len(filtered)} installed packages from {label.lower()}.")
-        elif self.search_entry.get_text().strip():
+        if hasattr(self, "search_button"):
+            self.search_button.set_label(
+                "Search GitHub" if self.selected_source() == "github" else "Search packages"
+            )
+        if self.browse_query:
             self.on_search(self.source_dropdown)
 
     def show_items(self, items: list, heading: str, *, remember: bool = True) -> None:
+        max_r = int(SETTINGS.get("max_results", MAX_GUI_RESULTS))
         if remember:
             self.raw_items = list(items)
-        self.items = items[:MAX_GUI_RESULTS]
+        self.items = items[:max_r]
         self.current_item = None
         self.clear_rows()
         self.result_heading.set_text(heading)
         for item in self.items:
-            self.result_list.append(PackageRow(item))
+            self.result_list.append(PackageRow(item, compact=self.view_mode == "installed"))
         self.detail_name.set_text("Select a package")
         self.detail_name.set_halign(Gtk.Align.CENTER)
         self.detail_name.set_xalign(0.5)
-        self.detail_name.set_margin_top(150)
+        self.detail_name.set_margin_top(140)
         self.detail_meta.set_text("Package details appear here.")
         self.detail_meta.set_halign(Gtk.Align.CENTER)
         self.detail_meta.set_xalign(0.5)
         self.detail_text.get_buffer().set_text("")
         self.info_button.set_sensitive(False)
         self.versions_button.set_sensitive(False)
+        self.files_button.set_sensitive(False)
+        self.copy_button.set_sensitive(False)
+        self.website_button.set_sensitive(False)
         self.install_button.set_sensitive(False)
         self.remove_button.set_sensitive(False)
         self.detail_actions.set_visible(False)
 
     def refresh_installed(self, _widget=None) -> None:
-        if self.installed_button.get_active():
-            self.on_installed_toggled(self.installed_button)
-        else:
-            self.installed_button.set_active(True)
+        self.switch_view_mode("installed")
+        self.load_installed(force=True)
+
+    def on_installed_toggled(self, button) -> None:
+        """Backward-compatible handler for installed button."""
+        self.switch_view_mode("installed")
 
     def show_text_dialog(self, title: str, detail: str) -> None:
         if not self.window:
@@ -1115,6 +2081,9 @@ class PacmangrGUI(Gtk.Application):
         for label, key in self.sources[1:]:
             if key == "appimage":
                 lines.append(f"{label}\nLocal files in Applications folders")
+                continue
+            if key == "github":
+                lines.append(f"{label}\nGitHub repository search (internet required)")
                 continue
             path = None
             if key in {"pacman", "yay", "paru", "flatpak", "apt", "snap", "git"}:
@@ -1164,12 +2133,59 @@ class PacmangrGUI(Gtk.Application):
             self.search_entry.grab_focus()
             return
 
-        self.view_mode = "search"
-        if self.installed_button.get_active():
-            self.installed_button.set_active(False)
+        self.browse_query = query
         self.request_id += 1
         request_id = self.request_id
         backend = self.selected_source()
+        if backend == "github":
+            self.set_status(f"Searching GitHub for {query!r}…", busy=True)
+
+            def github_worker() -> None:
+                try:
+                    params = urllib.parse.urlencode(
+                        {"q": query, "sort": "stars", "order": "desc", "per_page": 30}
+                    )
+                    request = urllib.request.Request(
+                        f"https://api.github.com/search/repositories?{params}",
+                        headers={
+                            "Accept": "application/vnd.github+json",
+                            "User-Agent": "Pacmangr-GUI",
+                        },
+                    )
+                    with urllib.request.urlopen(request, timeout=15) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+
+                    results = []
+                    for repository in payload.get("items", []):
+                        item = CORE.git_package(repository.get("clone_url", ""))
+                        if item is None:
+                            continue
+                        item.name = repository.get("full_name") or item.name
+                        item.repo = item.name
+                        description = repository.get("description") or "No description provided."
+                        stars = repository.get("stargazers_count", 0)
+                        language = repository.get("language")
+                        item.description = f"{description}\n\n★ {stars:,} stars"
+                        if language:
+                            item.description += f" · {language}"
+                        item.description += (
+                            "\nClone stores the checkout in Pacmangr's managed Git directory. "
+                            "Repository build scripts are not run automatically."
+                        )
+                        results.append(item)
+                    GLib.idle_add(self.finish_search, request_id, query, results, "")
+                except Exception as exc:
+                    GLib.idle_add(
+                        self.finish_search,
+                        request_id,
+                        query,
+                        [],
+                        f"GitHub search failed: {exc}",
+                    )
+
+            threading.Thread(target=github_worker, daemon=True).start()
+            return
+
         if backend == "all" and CORE.is_git_url(query):
             backend = "git"
         source_label = self.sources[self.source_dropdown.get_selected()][0]
@@ -1182,6 +2198,7 @@ class PacmangrGUI(Gtk.Application):
         cached = cached_engine.cache.load_search(query, managers)
         if cached:
             cached = cached_engine.rank_results(cached_engine.dedupe_items(cached), query)
+            self.browse_items = cached
             self.show_items(cached, f"Results for “{query}” · refreshing")
 
         def worker() -> None:
@@ -1189,55 +2206,23 @@ class PacmangrGUI(Gtk.Application):
                 engine = CORE.headless_ui()
                 results = engine.search_packages(query, backend)
                 GLib.idle_add(self.finish_search, request_id, query, results, "")
-            except Exception as exc:  # noqa: BLE001 - keep GUI alive if one backend breaks.
+            except Exception as exc:
                 GLib.idle_add(self.finish_search, request_id, query, [], str(exc))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def finish_search(self, request_id: int, query: str, items: list, error: str) -> bool:
-        if request_id != self.request_id or self.view_mode != "search":
+        if request_id != self.request_id or self.view_mode != "browse":
             return False
         if error:
             self.set_status(f"Search failed: {error}")
             return False
+        self.browse_items = items
         self.show_items(items, f"Results for “{query}”")
-        suffix = f" · showing first {MAX_GUI_RESULTS}" if len(items) > MAX_GUI_RESULTS else ""
-        self.set_status(f"Found {len(items)} packages{suffix}.")
-        return False
-
-    def on_installed_toggled(self, button: Gtk.ToggleButton) -> None:
-        if not button.get_active():
-            return
-        self.view_mode = "installed"
-        self.request_id += 1
-        request_id = self.request_id
-        cached = self.cache.load_installed()
-        if cached:
-            self.show_items(cached, "Installed packages · refreshing")
-        self.set_status("Refreshing installed packages…", busy=True)
-
-        def worker() -> None:
-            try:
-                items = CORE.collect_installed_packages(self.tools)
-                self.cache.save_installed(items)
-                GLib.idle_add(self.finish_installed, request_id, items, "")
-            except Exception as exc:  # noqa: BLE001
-                GLib.idle_add(self.finish_installed, request_id, [], str(exc))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def finish_installed(self, request_id: int, items: list, error: str) -> bool:
-        if request_id != self.request_id or self.view_mode != "installed":
-            return False
-        if error:
-            self.set_status(f"Installed-package refresh failed: {error}")
-            return False
-        source = self.selected_source()
-        filtered = [item for item in items if self.source_matches(item, source)]
-        label = self.sources[self.source_dropdown.get_selected()][0]
-        self.raw_items = list(items)
-        self.show_items(filtered, "Installed packages" if source == "all" else f"Installed · {label}", remember=False)
-        self.set_status(f"{len(filtered)} installed packages" + ("." if source == "all" else f" from {label.lower()}."))
+        max_r = int(SETTINGS.get("max_results", MAX_GUI_RESULTS))
+        suffix = f" · showing first {max_r}" if len(items) > max_r else ""
+        noun = "repositories" if self.selected_source() == "github" else "packages"
+        self.set_status(f"Found {len(items)} {noun}{suffix}.")
         return False
 
     def on_row_selected(self, _listbox, row: PackageRow | None) -> None:
@@ -1246,15 +2231,23 @@ class PacmangrGUI(Gtk.Application):
         item = row.item
         self.current_item = item
         self.detail_actions.set_visible(True)
-        self.detail_name.set_halign(Gtk.Align.FILL)
-        self.detail_name.set_xalign(0)
-        self.detail_name.set_margin_top(18)
-        self.detail_meta.set_halign(Gtk.Align.FILL)
-        self.detail_meta.set_xalign(0)
         self.detail_name.set_text(item.title())
-        state = "installed" if item.installed else "available"
+        self.detail_name.set_halign(Gtk.Align.START)
+        self.detail_name.set_xalign(0.0)
+        self.detail_name.set_margin_top(16)
+        self.detail_meta.set_halign(Gtk.Align.START)
+        self.detail_meta.set_xalign(0.0)
+
+        state = "installed" if item.installed else "available to install"
+        if getattr(item, "is_orphan", False):
+            state = "installed (unused orphan)"
+        elif getattr(item, "install_reason", "") == "explicit":
+            state = "installed explicitly"
+        elif getattr(item, "install_reason", "") == "dependency":
+            state = "installed as dependency"
+
         meta = [
-            f"{item.source} · {state}",
+            f"source: {item.source} · {state}",
             f"package: {item.package_id}",
             f"version: {item.version or 'unknown'}",
         ]
@@ -1267,17 +2260,22 @@ class PacmangrGUI(Gtk.Application):
         self.detail_text.get_buffer().set_text(description)
         self.info_button.set_sensitive(True)
         self.versions_button.set_sensitive(item.source in {"pacman", "aur", "aur/local", "apt"} or item.manager in {"pacman", "yay", "paru"})
+        self.files_button.set_sensitive(item.installed)
+        self.copy_button.set_sensitive(True)
+        self.website_button.set_sensitive(True)
         self.install_button.set_label("Reinstall" if item.installed else "Install")
         if item.source == "git":
-            self.install_button.set_label("Update checkout" if item.installed else "Fetch repository")
-        self.install_button.set_sensitive(item.source != "appimage")
+            self.install_button.set_label("Update checkout" if item.installed else "Clone repository")
+        self.install_button.set_sensitive(
+            item.source != "appimage" and (item.source != "git" or bool(self.tools.git))
+        )
         self.remove_button.set_sensitive((item.installed or item.source == "appimage") and item.source != "git")
 
     def on_info(self, _button) -> None:
         item = self.current_item
         if not item:
             return
-        command = item.info_command(self.tools, self.view_mode == "installed")
+        command = item.info_command(self.tools, self.view_mode == "installed" or item.installed)
         if not command:
             self.set_status(f"No details command is available for {item.title()}.")
             return
@@ -1316,7 +2314,7 @@ class PacmangrGUI(Gtk.Application):
                 if versions:
                     self.cache.save_versions(manager, item.package_id, versions)
                 GLib.idle_add(self.finish_versions, item, versions, "")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 GLib.idle_add(self.finish_versions, item, [], str(exc))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1331,7 +2329,7 @@ class PacmangrGUI(Gtk.Application):
         self.set_status(f"Found {len(versions)} versions for {item.title()}.")
         return False
 
-    def confirm_update_all(self, _button) -> None:
+    def confirm_update_all(self, _button=None) -> None:
         if not self.window:
             return
         commands = CORE.system_update_commands(self.tools)
@@ -1407,6 +2405,8 @@ class PacmangrGUI(Gtk.Application):
         self.stop_operation_progress()
         self.detail_text.get_buffer().set_text(output or "No package-manager output.")
         self.set_status("All package updates completed." if code == 0 else f"Package update stopped with status {code}.")
+        if code == 0 and self.installed_loaded:
+            self.load_installed(force=True)
         return False
 
     def confirm_action(self, action: str, install_scope: str | None = None) -> None:
@@ -1416,8 +2416,10 @@ class PacmangrGUI(Gtk.Application):
         if action == "install" and (item.source == "pip" or item.manager == "pip") and install_scope is None:
             self.choose_pip_scope(item)
             return
+
+        scope = install_scope or SETTINGS.get("pip_scope", "venv")
         command = (
-            item.install_command(self.tools, install_scope=install_scope or "user")
+            item.install_command(self.tools, install_scope=scope)
             if action == "install"
             else item.remove_command(self.tools)
         )
@@ -1425,14 +2427,19 @@ class PacmangrGUI(Gtk.Application):
             self.set_status(f"No {action} command is available for {item.title()}.")
             return
 
+        if not SETTINGS.get("confirm_actions", True):
+            self.launch_operation(action, item, command)
+            return
+
         dialog = Gtk.AlertDialog()
-        dialog.set_message(f"{action.title()} {item.title()}?")
+        action_label = "Clone" if action == "install" and item.source == "git" and not item.installed else action.title()
+        dialog.set_message(f"{action_label} {item.title()}?")
         dialog.set_detail(
             "This runs quietly in the background. If administrator access is "
             "needed, the desktop will show a graphical password prompt.\n\n"
             + shlex.join(command)
         )
-        dialog.set_buttons(["Cancel", action.title()])
+        dialog.set_buttons(["Cancel", action_label])
         dialog.set_cancel_button(0)
         dialog.set_default_button(1)
 
@@ -1450,12 +2457,14 @@ class PacmangrGUI(Gtk.Application):
         if not self.window:
             return
         dialog = Gtk.AlertDialog()
-        dialog.set_message(f"Where should {item.title()} be installed?")
+        dialog.set_message(f"Install {item.title()} with Python Pip")
         dialog.set_detail(
-            "Venv keeps the package isolated under ~/.local/share/pacmangr/venvs and is recommended.\n\n"
-            "User installs into your user Python environment. System is privileged and changes the OS Python environment."
+            "Choose where Pip should place the package:\n\n"
+            "• Managed venv: Isolated under ~/.local/share/pacmangr/pip-venvs\n"
+            "• User install: Into ~/.local without touching system files\n"
+            "• System install: Requires root privileges"
         )
-        dialog.set_buttons(["Cancel", "Venv · recommended", "User", "System"])
+        dialog.set_buttons(["Cancel", "Managed venv", "User install", "System install"])
         dialog.set_cancel_button(0)
         dialog.set_default_button(1)
 
@@ -1526,6 +2535,9 @@ class PacmangrGUI(Gtk.Application):
         if code == 0:
             item.installed = action == "install"
             self.set_status(f"{action.title()} completed for {item.title()}.")
+            # Refresh installed list if loaded
+            if self.installed_loaded:
+                self.load_installed(force=True)
         elif code in {126, 127} and "pkexec" in text:
             self.set_status("Graphical authentication is unavailable; package operation stopped.")
         else:
@@ -1535,13 +2547,21 @@ class PacmangrGUI(Gtk.Application):
         if self.current_item is item:
             self.install_button.set_label("Reinstall" if item.installed else "Install")
             if item.source == "git":
-                self.install_button.set_label("Update checkout" if item.installed else "Fetch repository")
-            self.install_button.set_sensitive(item.source != "appimage")
+                self.install_button.set_label("Update checkout" if item.installed else "Clone repository")
+            self.install_button.set_sensitive(
+                item.source != "appimage" and (item.source != "git" or bool(self.tools.git))
+            )
             self.remove_button.set_sensitive((item.installed or item.source == "appimage") and item.source != "git")
+            self.files_button.set_sensitive(item.installed)
         return False
 
     def on_open_tui(self, _button) -> None:
-        terminal = shutil.which("foot") or shutil.which("xterm")
+        preferred = SETTINGS.get("preferred_terminal", "auto")
+        terminal = None
+        if preferred != "auto":
+            terminal = shutil.which(preferred)
+        if not terminal:
+            terminal = shutil.which("foot") or shutil.which("kitty") or shutil.which("alacritty") or shutil.which("xterm")
         pacmangr = shutil.which("pacmangr") or str(Path(__file__).resolve().with_name("pacmangr"))
         if not terminal:
             self.set_status("No terminal found.")
