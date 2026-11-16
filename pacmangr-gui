@@ -254,7 +254,7 @@ def cache_summary(cache) -> str:
     return "\n\n".join(lines)
 
 
-def palette(scheme_path: Path | None = None) -> dict[str, str]:
+def palette(scheme_path: Path | None = None, *, scheme_colours: dict | None = None) -> dict[str, str]:
     defaults = {
         "background": "0c0e12",
         "surface": "161a1f",
@@ -267,11 +267,14 @@ def palette(scheme_path: Path | None = None) -> dict[str, str]:
         "success": "b5ccba",
         "error": "fa746f",
     }
-    try:
-        source = scheme_path or (SCHEME_PATH if SCHEME_PATH.is_file() else HEILIOS_SCHEME_PATH)
-        colours = json.loads(source.read_text(encoding="utf-8")).get("colours", {})
-    except (OSError, ValueError, TypeError):
-        colours = {}
+    if scheme_colours is not None:
+        colours = scheme_colours
+    else:
+        try:
+            source = scheme_path or (SCHEME_PATH if SCHEME_PATH.is_file() else HEILIOS_SCHEME_PATH)
+            colours = json.loads(source.read_text(encoding="utf-8")).get("colours", {})
+        except (OSError, ValueError, TypeError):
+            colours = {}
 
     p = {
         "background": colours.get("background", defaults["background"]),
@@ -1136,21 +1139,31 @@ class PacmangrGUI(Gtk.Application):
 
     def refresh_colours(self) -> bool:
         """Refresh after Caelestia writes a new wallpaper-derived scheme."""
-        try:
-            scheme_path = PREVIEW_SCHEME_PATH if PREVIEW_SCHEME_PATH.is_file() else (SCHEME_PATH if SCHEME_PATH.is_file() else HEILIOS_SCHEME_PATH)
-            contents = scheme_path.read_text(encoding="utf-8")
-            colours = json.loads(contents).get("colours")
-            if not isinstance(colours, dict) or not colours:
+        scheme_path = next(
+            (path for path in (PREVIEW_SCHEME_PATH, SCHEME_PATH, HEILIOS_SCHEME_PATH) if path.is_file()),
+            None,
+        )
+        if scheme_path is None:
+            contents, colours = None, {}
+        else:
+            try:
+                contents = scheme_path.read_text(encoding="utf-8")
+                colours = json.loads(contents).get("colours")
+                if not isinstance(colours, dict) or not colours:
+                    return True
+            except (OSError, ValueError, TypeError, AttributeError):
                 return True
-        except (OSError, ValueError, TypeError, AttributeError):
-            return True
         if contents != self._scheme_contents:
+            self.apply_colours(scheme_colours=colours)
             self._scheme_contents = contents
-            self.apply_colours(scheme_path)
         return True
 
-    def apply_colours(self, scheme_path: Path | None = None) -> None:
-        colours = palette(scheme_path or (PREVIEW_SCHEME_PATH if PREVIEW_SCHEME_PATH.is_file() else None))
+    def apply_colours(self, *, scheme_colours: dict | None = None) -> None:
+        if scheme_colours is None:
+            source = PREVIEW_SCHEME_PATH if PREVIEW_SCHEME_PATH.is_file() else None
+            colours = palette(source)
+        else:
+            colours = palette(scheme_colours=scheme_colours)
         install_css(colours, SETTINGS.get("compact_rows", False))
         for widget in (self.brand_logo, self.package_activity):
             if widget is not None:
