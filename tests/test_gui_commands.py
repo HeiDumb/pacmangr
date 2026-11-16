@@ -214,3 +214,41 @@ class PacmanAnimationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class WallpaperColourTests(unittest.TestCase):
+    def test_preview_and_committed_scheme_updates(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            committed = root / 'scheme.json'
+            preview = root / 'preview.json'
+            helios = root / 'helios.json'
+            committed.write_text(json.dumps({'colours': {'primary': '111111'}}))
+            with patch.object(GUI, 'SCHEME_PATH', committed), \
+                 patch.object(GUI, 'PREVIEW_SCHEME_PATH', preview), \
+                 patch.object(GUI, 'HEILIOS_SCHEME_PATH', helios):
+                app = GUI.PacmangrGUI()
+                seen = []
+                app.apply_colours = lambda path: seen.append(GUI.palette(path)['primary'])
+                app.refresh_colours()
+                preview.write_text(json.dumps({'colours': {'primary': '222222'}}))
+                app.refresh_colours()
+                preview.write_text('{')
+                app.refresh_colours()
+                preview.unlink()
+                app.refresh_colours()
+                self.assertEqual(seen, ['111111', '222222', '111111'])
+
+    def test_falls_back_to_helios_scheme(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helios = root / 'helios.json'
+            helios.write_text(json.dumps({'colours': {'primary': '123456'}}))
+            with patch.object(GUI, 'SCHEME_PATH', root / 'missing.json'), \
+                 patch.object(GUI, 'HEILIOS_SCHEME_PATH', helios):
+                self.assertEqual(GUI.palette()['primary'], '123456')

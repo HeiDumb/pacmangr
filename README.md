@@ -305,3 +305,7 @@ makepkg --verifysource
 ## License
 
 Pacmangr is licensed under the [MIT License](LICENSE).
+
+### Wallpaper-derived colors
+
+When available, the GTK interface follows the Caelestia color scheme and reloads it while running. If no Caelestia scheme exists, it falls back to the Helios scheme or the built-in colors. A custom integration may publish temporary wallpaper preview colors to `~/.local/state/caelestia/wallpaper/preview-scheme.json`; Pacmangr uses that file until it is removed. Stock Caelestia does not currently publish this preview file, so browsing previews requires a separate Caelestia integration.
