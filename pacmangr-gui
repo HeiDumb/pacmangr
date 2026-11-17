@@ -300,6 +300,9 @@ def palette(scheme_path: Path | None = None, *, scheme_colours: dict | None = No
 def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None = None) -> None:
     global CURRENT_CSS_PROVIDER
     c = palette_dict or palette()
+    red, green, blue = hex_rgb(c["surface"], fallback="161a1f")
+    light_surface = 0.2126 * red + 0.7152 * green + 0.0722 * blue >= 0.5
+    label_colour = "000000" if light_surface else c["text"]
     is_compact = compact if compact is not None else bool(SETTINGS.get("compact_rows", False))
     row_margin_v = "1px" if is_compact else "3px"
     row_pad_v = "6px" if is_compact else "10px"
@@ -315,6 +318,10 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         box-shadow: none;
         padding: 5px 10px;
     }}
+    headerbar, headerbar button:not(:disabled),
+    headerbar label.title-label, row.package-row label.package-name, .title-label, .package-name {{
+        color: #{label_colour};
+    }}
     .title-label {{
         font-size: 21px;
         font-weight: 800;
@@ -324,6 +331,9 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
     }}
     .subtitle-label, .muted {{
         color: #{c['muted']};
+    }}
+    headerbar label.subtitle-label {{
+        color: #{label_colour};
     }}
     button.pacmangr-exit-button {{
         min-width: 30px;
