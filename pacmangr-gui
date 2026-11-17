@@ -119,7 +119,9 @@ SORT_CHOICES = (
     ("Source", "source"),
     ("Installed first", "installed"),
 )
-SCHEME_PATH = Path.home() / ".local/state/heilios/scheme.json"
+SCHEME_PATH = Path.home() / ".local/state/caelestia/scheme.json"
+PREVIEW_SCHEME_PATH = SCHEME_PATH.parent / "wallpaper/preview-scheme.json"
+HEILIOS_SCHEME_PATH = Path.home() / ".local/state/heilios/scheme.json"
 
 
 def prepare_gui_operation(
@@ -252,7 +254,7 @@ def cache_summary(cache) -> str:
     return "\n\n".join(lines)
 
 
-def palette() -> dict[str, str]:
+def palette(scheme_path: Path | None = None, *, scheme_colours: dict | None = None) -> dict[str, str]:
     defaults = {
         "background": "0c0e12",
         "surface": "161a1f",
@@ -265,10 +267,14 @@ def palette() -> dict[str, str]:
         "success": "b5ccba",
         "error": "fa746f",
     }
-    try:
-        colours = json.loads(SCHEME_PATH.read_text(encoding="utf-8")).get("colours", {})
-    except (OSError, ValueError, TypeError):
-        colours = {}
+    if scheme_colours is not None:
+        colours = scheme_colours
+    else:
+        try:
+            source = scheme_path or (SCHEME_PATH if SCHEME_PATH.is_file() else HEILIOS_SCHEME_PATH)
+            colours = json.loads(source.read_text(encoding="utf-8")).get("colours", {})
+        except (OSError, ValueError, TypeError):
+            colours = {}
 
     p = {
         "background": colours.get("background", defaults["background"]),
@@ -1053,6 +1059,10 @@ class PacmangrGUI(Gtk.Application):
         self.request_id = 0
         self.operation_running = False
         self.package_activity: PacmanActivity | None = None
+        self.brand_logo: PacmangrLogo | None = None
+        self._scheme_contents = None
+        self._colour_monitors = []
+        self._colour_refresh_source = 0
         self.operation_progress: Gtk.ProgressBar | None = None
         self.operation_progress_source = 0
         self.operation_started = 0.0
@@ -1091,6 +1101,9 @@ class PacmangrGUI(Gtk.Application):
 
         self.build_header()
         self.build_content()
+        self.refresh_colours()
+        self.watch_colours()
+        GLib.timeout_add(1000, self.refresh_colours)
         self.window.present()
 
         # Switch to configured default view
@@ -1099,9 +1112,71 @@ class PacmangrGUI(Gtk.Application):
         if SETTINGS.get("check_updates_on_launch", False):
             GLib.timeout_add(1500, self.check_updates_silently)
 
+    def watch_colours(self) -> None:
+        """Watch directories so atomic replacement and removal are detected."""
+        for directory in (SCHEME_PATH.parent, PREVIEW_SCHEME_PATH.parent, HEILIOS_SCHEME_PATH.parent):
+            try:
+                monitor = Gio.File.new_for_path(str(directory)).monitor_directory(
+                    Gio.FileMonitorFlags.NONE, None
+                )
+                monitor.connect("changed", self.on_colour_file_changed)
+                self._colour_monitors.append(monitor)
+            except GLib.Error:
+                pass  # The periodic check remains a fallback.
+
+    def on_colour_file_changed(self, _monitor, file, other_file, _event) -> None:
+        paths = {SCHEME_PATH, PREVIEW_SCHEME_PATH, HEILIOS_SCHEME_PATH}
+        if not any(f and f.get_path() and Path(f.get_path()) in paths for f in (file, other_file)):
+            return
+        if self._colour_refresh_source:
+            GLib.source_remove(self._colour_refresh_source)
+        self._colour_refresh_source = GLib.timeout_add(30, self.refresh_colours_from_event)
+
+    def refresh_colours_from_event(self) -> bool:
+        self._colour_refresh_source = 0
+        self.refresh_colours()
+        return False
+
+    def refresh_colours(self) -> bool:
+        """Refresh after Caelestia writes a new wallpaper-derived scheme."""
+        scheme_path = next(
+            (path for path in (PREVIEW_SCHEME_PATH, SCHEME_PATH, HEILIOS_SCHEME_PATH) if path.is_file()),
+            None,
+        )
+        if scheme_path is None:
+            contents, colours = None, {}
+        else:
+            try:
+                contents = scheme_path.read_text(encoding="utf-8")
+                colours = json.loads(contents).get("colours")
+                if not isinstance(colours, dict) or not colours:
+                    return True
+            except (OSError, ValueError, TypeError, AttributeError):
+                return True
+        if contents != self._scheme_contents:
+            self.apply_colours(scheme_colours=colours)
+            self._scheme_contents = contents
+        return True
+
+    def apply_colours(self, *, scheme_colours: dict | None = None) -> None:
+        if scheme_colours is None:
+            source = PREVIEW_SCHEME_PATH if PREVIEW_SCHEME_PATH.is_file() else None
+            colours = palette(source)
+        else:
+            colours = palette(scheme_colours=scheme_colours)
+        install_css(colours, SETTINGS.get("compact_rows", False))
+        for widget in (self.brand_logo, self.package_activity):
+            if widget is not None:
+                widget._body = hex_rgb(colours["primary"])
+                widget._eye = hex_rgb(colours["on_primary"])
+                widget._pellet = hex_rgb(colours["success"])
+                if isinstance(widget, PacmanActivity):
+                    widget._remove_pellet = hex_rgb(colours["error"])
+                widget.queue_draw()
+
     def apply_settings(self) -> None:
         """Dynamically apply updated settings without restarting."""
-        install_css(palette(), SETTINGS.get("compact_rows", False))
+        self.apply_colours()
         if self.view_mode == "browse":
             if self.browse_items:
                 self.show_items(self.browse_items, f"Results for “{self.browse_query}”", remember=False)
@@ -1154,7 +1229,8 @@ class PacmangrGUI(Gtk.Application):
 
         # Keep the titlebar focused on the app identity; views sit below it.
         brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        brand.append(PacmangrLogo(palette()))
+        self.brand_logo = PacmangrLogo(palette())
+        brand.append(self.brand_logo)
         copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         title = Gtk.Label(label="pacmangr", xalign=0)
         title.add_css_class("title-label")

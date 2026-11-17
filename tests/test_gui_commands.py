@@ -212,5 +212,106 @@ class PacmanAnimationTests(unittest.TestCase):
         self.assertIn("2.0 MiB/s", output)
 
 
+class WallpaperColourTests(unittest.TestCase):
+    def test_preview_and_committed_scheme_updates(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            committed = root / 'scheme.json'
+            preview = root / 'preview.json'
+            helios = root / 'helios.json'
+            committed.write_text(json.dumps({'colours': {'primary': '111111'}}))
+            with patch.object(GUI, 'SCHEME_PATH', committed), \
+                 patch.object(GUI, 'PREVIEW_SCHEME_PATH', preview), \
+                 patch.object(GUI, 'HEILIOS_SCHEME_PATH', helios):
+                app = GUI.PacmangrGUI()
+                seen = []
+                app.apply_colours = lambda *, scheme_colours: seen.append(GUI.palette(scheme_colours=scheme_colours)['primary'])
+                app.refresh_colours()
+                preview.write_text(json.dumps({'colours': {'primary': '222222'}}))
+                app.refresh_colours()
+                preview.write_text('{')
+                app.refresh_colours()
+                preview.unlink()
+                app.refresh_colours()
+                self.assertEqual(seen, ['111111', '222222', '111111'])
+
+    def test_falls_back_to_helios_scheme(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helios = root / 'helios.json'
+            helios.write_text(json.dumps({'colours': {'primary': '123456'}}))
+            with patch.object(GUI, 'SCHEME_PATH', root / 'missing.json'), \
+                 patch.object(GUI, 'HEILIOS_SCHEME_PATH', helios):
+                self.assertEqual(GUI.palette()['primary'], '123456')
+
+    def test_validated_snapshot_survives_file_truncation(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            committed, preview, helios = (root / name for name in ("scheme", "preview", "helios"))
+            original = json.dumps({"colours": {"primary": "123456"}})
+            committed.write_text(original)
+            with patch.object(GUI, "SCHEME_PATH", committed), \
+                 patch.object(GUI, "PREVIEW_SCHEME_PATH", preview), \
+                 patch.object(GUI, "HEILIOS_SCHEME_PATH", helios):
+                app = GUI.PacmangrGUI()
+                seen = []
+                def apply(*, scheme_colours):
+                    committed.write_text("")
+                    seen.append(GUI.palette(scheme_colours=scheme_colours)["primary"])
+                app.apply_colours = apply
+                app.refresh_colours()
+                committed.write_text(original)
+                app.refresh_colours()
+                self.assertEqual(seen, ["123456"])
+
+    def test_removing_last_scheme_restores_defaults(self):
+        import json
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            committed, preview, helios = (root / name for name in ("scheme", "preview", "helios"))
+            with patch.object(GUI, "SCHEME_PATH", committed), \
+                 patch.object(GUI, "PREVIEW_SCHEME_PATH", preview), \
+                 patch.object(GUI, "HEILIOS_SCHEME_PATH", helios), \
+                 patch.object(GUI.SETTINGS, "get", return_value="auto"):
+                app = GUI.PacmangrGUI()
+                seen = []
+                app.apply_colours = lambda *, scheme_colours: seen.append(GUI.palette(scheme_colours=scheme_colours)["primary"])
+                for path in (preview, committed):
+                    path.write_text(json.dumps({"colours": {"primary": "123456"}}))
+                    app.refresh_colours()
+                    path.unlink()
+                    app.refresh_colours()
+                self.assertEqual(seen, ["123456", "adc9ea", "123456", "adc9ea"])
+
+    def test_failed_application_does_not_cache_snapshot(self):
+        import json
+        from unittest.mock import Mock, patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            committed = root / "scheme"
+            committed.write_text(json.dumps({"colours": {"primary": "123456"}}))
+            with patch.object(GUI, "SCHEME_PATH", committed), \
+                 patch.object(GUI, "PREVIEW_SCHEME_PATH", root / "preview"), \
+                 patch.object(GUI, "HEILIOS_SCHEME_PATH", root / "helios"):
+                app = GUI.PacmangrGUI()
+                app.apply_colours = Mock(side_effect=[RuntimeError("failed"), None])
+                with self.assertRaises(RuntimeError):
+                    app.refresh_colours()
+                app.refresh_colours()
+                self.assertEqual(app.apply_colours.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
