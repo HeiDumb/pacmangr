@@ -28,8 +28,11 @@ from .settings import (  # noqa: E402
 )
 from .theme import (  # noqa: E402
     ACCENT_PRESETS,
+    CAELESTIA_SCHEME_PATH,
     CURRENT_CSS_PROVIDER,
+    HEILIOS_SCHEME_PATH,
     MATUGEN_SCHEME_PATH,
+    PREVIEW_SCHEME_PATH,
     SCHEME_PATH,
     PacmangrLogo,
     apply_matugen_from_wallpaper,
@@ -81,7 +84,8 @@ __all__ = [
     # Settings.
     "SETTINGS", "SETTINGS_PATH", "SettingsManager", "SettingsDialog",
     # Theme / drawing.
-    "ACCENT_PRESETS", "SCHEME_PATH", "MATUGEN_SCHEME_PATH", "CURRENT_CSS_PROVIDER",
+    "ACCENT_PRESETS", "SCHEME_PATH", "PREVIEW_SCHEME_PATH", "HEILIOS_SCHEME_PATH",
+    "CAELESTIA_SCHEME_PATH", "MATUGEN_SCHEME_PATH", "CURRENT_CSS_PROVIDER",
     "palette", "install_css", "hex_rgb", "pacman_frame", "PacmangrLogo",
     "apply_matugen_from_wallpaper",
     # Operations.

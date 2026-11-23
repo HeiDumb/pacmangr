@@ -33,7 +33,7 @@ from .settings import SETTINGS, SettingsDialog  # noqa: E402
 from .self_update import UpdateResult, check_and_apply_update  # noqa: E402
 from .sidebar import Sidebar  # noqa: E402
 from .theme import (  # noqa: E402
-    CAELESTIA_SCHEME_PATH,
+    HEILIOS_SCHEME_PATH,
     MATUGEN_SCHEME_PATH,
     PREVIEW_SCHEME_PATH,
     SCHEME_PATH,
@@ -489,14 +489,13 @@ class PacmangrGUI(Gtk.Application):
         self.sidebar.set_badge("orphans", len(self.orphans_set))
 
     def _scheme_paths(self) -> tuple[Path, ...]:
-        configured = Path(SETTINGS.get("scheme_path") or SCHEME_PATH).expanduser()
-        return (
-            PREVIEW_SCHEME_PATH,
-            CAELESTIA_SCHEME_PATH,
-            configured,
-            SCHEME_PATH,
-            MATUGEN_SCHEME_PATH,
-        )
+        paths = [PREVIEW_SCHEME_PATH, SCHEME_PATH, HEILIOS_SCHEME_PATH, MATUGEN_SCHEME_PATH]
+        configured_value = SETTINGS.get("scheme_path")
+        if configured_value:
+            configured = Path(configured_value).expanduser()
+            if configured.is_absolute() and configured not in paths:
+                paths.insert(2, configured)
+        return tuple(paths)
 
     def _active_scheme_path(self) -> Path | None:
         mode = SETTINGS.get("theme_mode", "auto")

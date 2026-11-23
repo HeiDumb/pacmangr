@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import ModuleType as _ModuleType
 
 _here = str(Path(__file__).resolve().parent)
 if _here not in sys.path:
@@ -16,6 +17,29 @@ if _here not in sys.path:
 
 from pacmangr_gui import *  # noqa: E402,F401,F403
 from pacmangr_gui import __all__  # noqa: E402,F401
+import pacmangr_gui.app as _app_module  # noqa: E402
+import pacmangr_gui.theme as _theme_module  # noqa: E402
+
+
+class _GuiCompatModule(_ModuleType):
+    """Keep patched theme paths in the compatibility launcher in sync."""
+
+    _SCHEME_PATH_NAMES = {
+        "SCHEME_PATH",
+        "PREVIEW_SCHEME_PATH",
+        "HEILIOS_SCHEME_PATH",
+        "CAELESTIA_SCHEME_PATH",
+        "MATUGEN_SCHEME_PATH",
+    }
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name in self._SCHEME_PATH_NAMES:
+            setattr(_theme_module, name, value)
+            setattr(_app_module, name, value)
+
+
+sys.modules[__name__].__class__ = _GuiCompatModule
 
 
 if __name__ == "__main__":

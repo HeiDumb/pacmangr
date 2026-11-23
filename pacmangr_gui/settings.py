@@ -45,7 +45,7 @@ class SettingsManager:
         "persist_window_geometry": True,
         # Appearance / theming.
         "theme_mode": "auto",  # auto | matugen | accent
-        "scheme_path": str(Path.home() / ".local/state/heilios/scheme.json"),
+        "scheme_path": str(Path.home() / ".local/state/caelestia/scheme.json"),
         "wallpaper_path": "",
         "matugen_scheme_type": "tonal-spot",
         "matugen_binary": "matugen",

@@ -213,6 +213,25 @@ class PacmanAnimationTests(unittest.TestCase):
 
 
 class WallpaperColourTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+
+        matugen_dir = tempfile.TemporaryDirectory(prefix="pacmangr-test-matugen-")
+        self.addCleanup(matugen_dir.cleanup)
+        matugen_path = Path(matugen_dir.name) / "matugen.json"
+        self._matugen_patch = patch.object(GUI, "MATUGEN_SCHEME_PATH", matugen_path)
+        self._matugen_patch.start()
+        self.addCleanup(self._matugen_patch.stop)
+
+        def default_setting(key, default=None):
+            if key == "scheme_path":
+                return str(GUI.SCHEME_PATH)
+            return GUI.SETTINGS.DEFAULTS.get(key, default)
+
+        self._settings_patch = patch.object(GUI.SETTINGS, "get", side_effect=default_setting)
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
+
     def test_preview_and_committed_scheme_updates(self):
         import json
         from unittest.mock import patch

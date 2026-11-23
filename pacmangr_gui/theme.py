@@ -25,8 +25,9 @@ ACCENT_PRESETS = {
     "coral": {"primary": "ff79c6", "on_primary": "49002a"},
 }
 
-SCHEME_PATH = Path.home() / ".local/state/heilios/scheme.json"
 CAELESTIA_SCHEME_PATH = Path.home() / ".local/state/caelestia/scheme.json"
+SCHEME_PATH = CAELESTIA_SCHEME_PATH
+HEILIOS_SCHEME_PATH = Path.home() / ".local/state/heilios/scheme.json"
 PREVIEW_SCHEME_PATH = CAELESTIA_SCHEME_PATH.parent / "wallpaper/preview-scheme.json"
 MATUGEN_SCHEME_PATH = Path.home() / ".config/pacmangr/matugen_scheme.json"
 CURRENT_CSS_PROVIDER: Gtk.CssProvider | None = None
@@ -107,7 +108,7 @@ def _heilios_scheme(path: Path | str = SCHEME_PATH) -> dict:
 
 
 def _matugen_scheme_path() -> Path:
-    return Path.home() / ".config/pacmangr/matugen_scheme.json"
+    return MATUGEN_SCHEME_PATH
 
 
 def palette(
@@ -124,10 +125,18 @@ def palette(
     elif scheme_colours is not None:
         scheme = _scheme_from_colours(scheme_colours)
     elif mode == "matugen":
-        scheme = _heilios_scheme(_matugen_scheme_path()) or _heilios_scheme(SCHEME_PATH)
+        scheme = (
+            _heilios_scheme(_matugen_scheme_path())
+            or _heilios_scheme(SCHEME_PATH)
+            or _heilios_scheme(HEILIOS_SCHEME_PATH)
+        )
     else:
         source = scheme_path or SETTINGS.get("scheme_path", SCHEME_PATH)
-        scheme = _heilios_scheme(source) or _heilios_scheme(SCHEME_PATH)
+        scheme = (
+            _heilios_scheme(source)
+            or _heilios_scheme(SCHEME_PATH)
+            or _heilios_scheme(HEILIOS_SCHEME_PATH)
+        )
         if not scheme:
             scheme = _heilios_scheme(_matugen_scheme_path())
 
@@ -208,7 +217,11 @@ def _write_scheme(scheme: dict) -> Path:
 
 def _fallback_scheme(message: str) -> tuple[bool, str]:
     """Use Heilios/accent colours when matugen cannot generate a palette."""
-    scheme = _heilios_scheme(SETTINGS.get("scheme_path", SCHEME_PATH)) or _heilios_scheme(SCHEME_PATH)
+    scheme = (
+        _heilios_scheme(SETTINGS.get("scheme_path", SCHEME_PATH))
+        or _heilios_scheme(SCHEME_PATH)
+        or _heilios_scheme(HEILIOS_SCHEME_PATH)
+    )
     if scheme:
         _write_scheme(scheme)
         install_css(_scheme_to_palette(scheme))
