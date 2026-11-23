@@ -18,9 +18,17 @@ interface, and delegates every action back to the appropriate manager.
 - Install, remove, and update through the native manager that owns a package.
 - Run as a keyboard-first curses TUI, a full GTK 4 desktop application, or a
   non-interactive CLI for scripts.
+- Navigate the desktop app with a slim, collapsible icon rail covering Browse &
+  Install, Installed, Updates, GitHub, Orphaned Packages, and Settings.
+- See full package details automatically when you select a result.
+- Theme the GTK app from your wallpaper with matugen (or follow an existing
+  Heilios scheme / fixed accent), so colours adapt to any desktop.
+- Update every detected source with a **single** authentication prompt.
 - Cache search results and installed-package data locally for a fast startup.
 - Show live operation progress, download speed, and ETA in the desktop app.
 - Use graphical polkit authentication for privileged GUI operations.
+- Keep the implementation organized as small `pacmangr_core/` and
+  `pacmangr_gui/` Python packages behind thin launcher scripts.
 
 ## Interfaces
 
@@ -50,6 +58,10 @@ The GTK app additionally needs:
 - A running graphical session
 - Polkit (`pkexec`) and a desktop polkit agent for system-level install,
   removal, and update actions
+
+Optional extras:
+
+- `matugen` — generate the app palette from a wallpaper (Appearance settings)
 
 On Arch Linux, install the runtime requirements with:
 
@@ -170,28 +182,49 @@ pacmangr doctor
                   host package databases
 ```
 
-Pacmangr constructs and runs each native manager's normal command rather than
-reimplementing package installation. It keeps a local SQLite cache at
+The executable `pacmangr` and `pacmangr-gui` files are thin launchers. All logic
+lives in the importable `pacmangr_core/` and `pacmangr_gui/` packages, split by
+responsibility (constants, models, cache, parsers, backends, operations, TUI,
+CLI; and for the GUI: app, sidebar, views, details, operations, settings, theme,
+widgets). Pacmangr constructs and runs each native manager's normal command
+rather than reimplementing package installation. It keeps a local SQLite cache at
 `~/.cache/pacmangr/pacmangr.sqlite` to make search and installed-package views
 responsive; clearing the cache never removes installed packages.
 
 ## Desktop app guide
 
 1. Start **Pacmangr** from your application launcher or run `pacmangr-gui`.
-2. Choose a package source, or leave it on **All sources**.
-3. Search for a package, then select a result to see its summary and status.
-4. Use **Details** or **Versions** before making a change when needed.
-5. Choose **Install**, **Reinstall**, **Remove**, or the **More** menu's
-   all-source update action.
+2. Use the slim icon rail on the left to pick a view: **Browse & Install**,
+   **Installed**, **Updates**, **GitHub**, **Orphaned Packages**, or **Settings**
+   at the bottom. Hover an icon for its name; `Ctrl+B` collapses or restores the
+   rail.
+3. In **Browse & Install**, choose a source or leave it on **All sources**, then
+   search (the source selector sits right beside the search bar). Selecting a
+   result shows its details automatically — package metadata, or a repository's
+   `README.md` for GitHub results.
+4. Use **Install**, **Reinstall**, or **Remove** from the detail pane. **Versions**
+   and **Files** are available there too.
+5. **Updates** lists available upgrades and updates every detected source with
+   one authentication prompt.
+6. **GitHub** searches public repositories (or accepts a pasted Git URL), shows
+   each repository's `README.md` in the details pane, and can clone/install it
+   through Pacmangr's git source.
+7. **Orphaned Packages** lists unused dependencies and can remove them safely.
 
-The **Installed packages** switch lists packages already present on the system.
-The **More** menu also refreshes that inventory, shows backend/cache status, and
-clears only Pacmangr's local cache. The app allows one package operation at a
-time and displays its command output and progress in the details pane.
+Backend and cache diagnostics, cache clearing, export, and the full theme and
+behaviour options live in **Settings**, organized into categorized pages. The
+app allows one package operation at a time and displays its command output and
+progress in the details pane. The window keeps whatever size you choose: switching
+views or loading content never resizes it, and your geometry is restored on the
+next launch. **Settings → Updates** can check for Pacmangr commits on GitHub at
+launch and every six hours, then update a user-local installation automatically.
+The package manager's **Cancel** button stops an active install, removal, or update.
 
 Privileged operations use polkit, so a graphical authentication prompt appears
-when the native manager needs administrator access. Flatpak actions do not need
-host root access when the selected Flatpak installation is user-scoped.
+when the native manager needs administrator access. Update-all wraps all native
+update commands in a single authenticated invocation (or one cached `sudo`
+authorization) so you are only asked once. Flatpak actions do not need host root
+access when the selected Flatpak installation is user-scoped.
 
 ## Terminal UI guide
 
@@ -284,7 +317,10 @@ hook scripts. Review a repository before running its instructions yourself.
 | A source is missing | Run `pacmangr managers`; install the native backend and restart Pacmangr. |
 | GUI does not start | Confirm GTK 4 and PyGObject are installed, then run `pacmangr-gui` from a terminal for the error. |
 | No authentication dialog | Install and start a graphical polkit agent, and confirm `pkexec` is available. |
-| Search data seems stale | Use the app's **Clear local cache** action or `pacmangr cache clear`, then search again. |
+| Multiple password prompts on update | Keep `pkexec` available; update-all uses one authenticated invocation. Without it, a cached `sudo` authorization is requested once. |
+| Theme does not match wallpaper | Install `matugen`, choose a wallpaper in **Settings → Appearance & Theme**, and select **Matugen from wallpaper**. |
+| GitHub search shows a rate-limit message | The unauthenticated GitHub API allows limited requests per hour; wait or paste a Git URL directly. |
+| Search data seems stale | Use **Settings → Advanced & Diagnostics → Clear local cache** or `pacmangr cache clear`, then search again. |
 | An action fails | Read the native manager's output in the details/log view; Pacmangr reports the underlying tool's result. |
 
 ## Development
@@ -296,7 +332,20 @@ make check
 ```
 
 This compiles both entry points, runs unit tests, and checks their
-non-interactive commands. To validate the Arch packaging metadata and sources:
+non-interactive commands.
+
+Source layout:
+
+```text
+pacmangr          # thin TUI/CLI launcher
+pacmangr-gui      # thin GTK launcher
+pacmangr_core/    # constants, models, cache, parsers, backends, operations, tui, cli
+pacmangr_gui/     # app, sidebar, views, details, operations, settings, theme, widgets
+backup/           # original monolithic files, kept for reference
+tests/            # unit tests load the launchers through SourceFileLoader
+```
+
+To validate the Arch packaging metadata and sources:
 
 ```sh
 makepkg --verifysource

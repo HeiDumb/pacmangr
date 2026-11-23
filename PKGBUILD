@@ -37,6 +37,14 @@ package() {
   install -Dm755 "$srcdir_repo/pacmangr-gui" \
     "$pkgdir/usr/bin/pacmangr-gui"
 
+  install -d "$pkgdir/usr/bin/pacmangr_core"
+  install -m644 "$srcdir_repo"/pacmangr_core/*.py \
+    "$pkgdir/usr/bin/pacmangr_core/"
+
+  install -d "$pkgdir/usr/bin/pacmangr_gui"
+  install -m644 "$srcdir_repo"/pacmangr_gui/*.py \
+    "$pkgdir/usr/bin/pacmangr_gui/"
+
   install -Dm644 "$srcdir_repo/io.github.hei.pacmangr.desktop" \
     "$pkgdir/usr/share/applications/io.github.hei.pacmangr.desktop"
 

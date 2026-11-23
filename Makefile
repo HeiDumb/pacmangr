@@ -9,6 +9,10 @@ APP_ID := io.github.hei.pacmangr
 install:
 	install -Dm755 pacmangr "$(BINDIR)/pacmangr"
 	install -Dm755 pacmangr-gui "$(BINDIR)/pacmangr-gui"
+	install -d "$(BINDIR)/pacmangr_core"
+	install -m644 pacmangr_core/*.py "$(BINDIR)/pacmangr_core/"
+	install -d "$(BINDIR)/pacmangr_gui"
+	install -m644 pacmangr_gui/*.py "$(BINDIR)/pacmangr_gui/"
 	install -Dm644 $(APP_ID).desktop "$(APPLICATIONDIR)/$(APP_ID).desktop"
 	install -Dm644 assets/$(APP_ID).png "$(ICONDIR)/$(APP_ID).png"
 	install -Dm644 assets/pacmangr-exit.png "$(DESTDIR)$(PREFIX)/share/pacmangr/assets/pacmangr-exit.png"
@@ -16,6 +20,8 @@ install:
 uninstall:
 	rm -f "$(BINDIR)/pacmangr"
 	rm -f "$(BINDIR)/pacmangr-gui"
+	rm -rf "$(BINDIR)/pacmangr_core"
+	rm -rf "$(BINDIR)/pacmangr_gui"
 	rm -f "$(APPLICATIONDIR)/$(APP_ID).desktop"
 	rm -f "$(ICONDIR)/$(APP_ID).png"
 	rm -f "$(DESTDIR)$(PREFIX)/share/pacmangr/assets/pacmangr-exit.png"
@@ -23,7 +29,9 @@ uninstall:
 
 check:
 	python3 -m py_compile pacmangr
+	python3 -m compileall -q pacmangr_core
 	python3 -m py_compile pacmangr-gui
+	python3 -m compileall -q pacmangr_gui
 	python3 -m unittest discover -s tests -v
 	./pacmangr --version
 	./pacmangr-gui --version
