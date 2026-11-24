@@ -1,5 +1,7 @@
 """Colour schemes, matugen integration and GTK styling."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -13,9 +15,9 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk
 
-from .settings import SETTINGS  # noqa: E402
+from .settings import SETTINGS
 
 ACCENT_PRESETS = {
     "gold": {"primary": "ffbe0b", "on_primary": "211a00"},
@@ -48,7 +50,11 @@ _DEFAULT_PALETTE = {
 _SCHEME_ROLES = {
     "background": ("background",),
     "surface": ("surfaceContainer", "surface_container", "surface"),
-    "surface_high": ("surfaceContainerHighest", "surface_container_highest", "surface_high"),
+    "surface_high": (
+        "surfaceContainerHighest",
+        "surface_container_highest",
+        "surface_high",
+    ),
     "text": ("onSurface", "on_surface", "text"),
     "muted": ("onSurfaceVariant", "on_surface_variant", "muted"),
     "outline": ("outlineVariant", "outline_variant", "outline"),
@@ -178,7 +184,7 @@ def _parse_json_output(text: str) -> dict | None:
     start, end = text.find("{"), text.rfind("}")
     if start >= 0 and end > start:
         try:
-            payload = json.loads(text[start:end + 1])
+            payload = json.loads(text[start : end + 1])
             return payload if isinstance(payload, dict) else None
         except (ValueError, TypeError):
             pass
@@ -190,7 +196,11 @@ def _matugen_scheme(payload: dict) -> dict:
     aliases = {
         "background": ("background", "surface"),
         "surface": ("surface_container", "surfaceContainer", "surface"),
-        "surface_high": ("surface_container_highest", "surfaceContainerHighest", "surface_container_high"),
+        "surface_high": (
+            "surface_container_highest",
+            "surfaceContainerHighest",
+            "surface_container_high",
+        ),
         "text": ("on_surface", "onSurface", "foreground"),
         "muted": ("on_surface_variant", "onSurfaceVariant", "muted"),
         "outline": ("outline_variant", "outlineVariant", "outline"),
@@ -253,7 +263,14 @@ def apply_matugen_from_wallpaper(
     if not resolved:
         return _fallback_scheme("Matugen is not installed or not executable.")
 
-    command = [resolved, "image", str(image), "-t", str(scheme_type or "tonal-spot"), "--json"]
+    command = [
+        resolved,
+        "image",
+        str(image),
+        "-t",
+        str(scheme_type or "tonal-spot"),
+        "--json",
+    ]
     try:
         process = subprocess.run(
             command,
@@ -292,12 +309,16 @@ def apply_matugen_from_wallpaper(
     return True, f"Applied the matugen palette generated from {image.name}."
 
 
-def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None = None) -> None:
+def install_css(
+    palette_dict: dict[str, str] | None = None, compact: bool | None = None
+) -> None:
     """Install (or replace) the application-wide colour provider."""
     global CURRENT_CSS_PROVIDER
     c = palette_dict or palette()
     setting_density = SETTINGS.get("row_density", "normal")
-    is_compact = compact if compact is not None else bool(SETTINGS.get("compact_rows", False))
+    is_compact = (
+        compact if compact is not None else bool(SETTINGS.get("compact_rows", False))
+    )
     if setting_density == "compact":
         is_compact = True
     row_margin_v = "1px" if is_compact else "3px"
@@ -311,72 +332,72 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
 
     css = f"""
     window {{
-        background: alpha(#{c['background']}, 0.97);
-        color: #{c['text']};
+        background: alpha(#{c["background"]}, 0.97);
+        color: #{c["text"]};
         font-size: {base_font}px;
     }}
     headerbar {{
-        background: alpha(#{c['surface']}, 0.94);
-        border-bottom: 1px solid alpha(#{c['outline']}, 0.75);
+        background: alpha(#{c["surface"]}, 0.94);
+        border-bottom: 1px solid alpha(#{c["outline"]}, 0.75);
         padding: 6px 12px;
     }}
     .header-title-widget {{ margin: 2px 8px; }}
     .brand-name {{
-        color: #{c['text']};
+        color: #{c["text"]};
         font-size: {int(round(17 * scale))}px;
         font-weight: 800;
         letter-spacing: 0.4px;
     }}
     .header-divider {{
-        background: alpha(#{c['outline']}, 0.8);
+        background: alpha(#{c["outline"]}, 0.8);
         min-width: 1px;
         margin: 4px 0;
     }}
     .header-view-title {{
-        color: #{c['text']};
+        color: #{c["text"]};
         font-size: {int(round(15 * scale))}px;
         font-weight: 750;
     }}
     .header-view-subtitle {{
-        color: #{c['muted']};
+        color: #{c["muted"]};
         font-size: {int(round(11 * scale))}px;
     }}
     .title-label {{
         font-size: {int(round(21 * scale))}px;
         font-weight: 800;
     }}
-    .brand-icon {{ color: #{c['primary']}; }}
-    .subtitle-label, .muted {{ color: #{c['muted']}; }}
+    .brand-icon {{ color: #{c["primary"]}; }}
+    .subtitle-label, .muted {{ color: #{c["muted"]}; }}
     .search-card {{
-        background-color: alpha(#{c['surface']}, 0.72);
-        background-image: linear-gradient(150deg, alpha(#{c['primary']}, 0.07), alpha(#{c['surface']}, 0.82) 60%);
-        border: 1px solid alpha(#{c['outline']}, 0.45);
+        background-color: alpha(#{c["surface"]}, 0.72);
+        background-image: linear-gradient(150deg, alpha(#{c["primary"]}, 0.07), alpha(#{c["surface"]}, 0.82) 60%);
+        border: 1px solid alpha(#{c["outline"]}, 0.45);
         border-radius: 22px;
     }}
     .view-toolbar {{ padding: 0; }}
     .detail-card, .status-card {{
-        background: alpha(#{c['surface']}, 0.92);
-        border: 1px solid alpha(#{c['outline']}, 0.75);
+        background: alpha(#{c["surface"]}, 0.92);
+        border: 1px solid alpha(#{c["outline"]}, 0.75);
         border-radius: 16px;
     }}
     .hero-card {{
-        background-image: linear-gradient(115deg, alpha(#{c['primary']}, 0.16), alpha(#{c['surface']}, 0.96) 52%);
-        border-color: alpha(#{c['primary']}, 0.45);
+        background-image: linear-gradient(115deg, alpha(#{c["primary"]}, 0.16), alpha(#{c["surface"]}, 0.96) 52%);
+        border-color: alpha(#{c["primary"]}, 0.45);
     }}
     .search-control {{
-        background-color: #{c['surface_high']};
-        background-image: linear-gradient(180deg, #{c['surface_high']}, #{c['surface']});
-        border: 1px solid alpha(#{c['outline']}, 0.95);
+        background-color: #{c["surface_high"]};
+        background-image: linear-gradient(180deg, #{c["surface_high"]}, #{c["surface"]});
+        border: 1px solid alpha(#{c["outline"]}, 0.95);
         border-radius: 18px;
         padding: 4px;
         min-height: 48px;
     }}
     .search-control:focus-within {{
-        border-color: alpha(#{c['primary']}, 0.82);
-        box-shadow: 0 0 0 2px alpha(#{c['primary']}, 0.12);
+        border-color: alpha(#{c["primary"]}, 0.82);
+        box-shadow: 0 0 0 2px alpha(#{c["primary"]}, 0.12);
     }}
     .section-label {{
-        color: #{c['muted']};
+        color: #{c["muted"]};
         font-size: 11px;
         font-weight: 800;
         letter-spacing: 0.6px;
@@ -384,10 +405,10 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
     searchentry {{
         min-height: 48px;
         border-radius: 999px;
-        background-color: alpha(#{c['surface_high']}, 0.72);
-        background-image: linear-gradient(180deg, alpha(#{c['surface_high']}, 0.85), alpha(#{c['surface']}, 0.92));
-        border: 1px solid alpha(#{c['outline']}, 0.75);
-        color: #{c['text']};
+        background-color: alpha(#{c["surface_high"]}, 0.72);
+        background-image: linear-gradient(180deg, alpha(#{c["surface_high"]}, 0.85), alpha(#{c["surface"]}, 0.92));
+        border: 1px solid alpha(#{c["outline"]}, 0.75);
+        color: #{c["text"]};
         font-size: 16px;
         padding: 0 18px;
     }}
@@ -400,7 +421,7 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         border: none;
         border-radius: 12px;
         box-shadow: none;
-        color: #{c['text']};
+        color: #{c["text"]};
         padding: 0 10px;
     }}
     .search-control searchentry:focus-within,
@@ -424,10 +445,10 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         border: none;
         border-radius: 12px;
         box-shadow: none;
-        color: #{c['text']};
+        color: #{c["text"]};
     }}
     .search-control dropdown.search-source button:hover {{
-        background: alpha(#{c['primary']}, 0.10);
+        background: alpha(#{c["primary"]}, 0.10);
     }}
     .search-control entry.search-field,
     .search-control entry.search-field:focus,
@@ -439,7 +460,7 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         box-shadow: none;
         outline: none;
         outline-color: transparent;
-        color: #{c['text']};
+        color: #{c["text"]};
     }}
     .search-control searchentry:focus,
     .search-control searchentry:focus-within,
@@ -451,16 +472,16 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         outline: none;
     }}
     searchentry:focus {{
-        border-color: #{c['primary']};
-        box-shadow: 0 0 0 3px alpha(#{c['primary']}, 0.22);
+        border-color: #{c["primary"]};
+        box-shadow: 0 0 0 3px alpha(#{c["primary"]}, 0.22);
     }}
     button {{
         border-radius: 10px;
         min-height: 36px;
         padding: 5px 14px;
-        color: #{c['text']};
+        color: #{c["text"]};
     }}
-    button:hover {{ background: alpha(#{c['surface_high']}, 0.9); }}
+    button:hover {{ background: alpha(#{c["surface_high"]}, 0.9); }}
     button.flat {{ background: transparent; }}
     .search-control searchentry button,
     .search-control searchentry button:hover,
@@ -472,30 +493,30 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         border-radius: 999px;
         background: transparent;
         box-shadow: none;
-        color: #{c['muted']};
+        color: #{c["muted"]};
     }}
     button.suggested-action {{
-        background: #{c['primary']};
-        color: #{c['on_primary']};
+        background: #{c["primary"]};
+        color: #{c["on_primary"]};
         font-weight: 750;
         border-color: transparent;
     }}
-    button.suggested-action:hover {{ background: alpha(#{c['primary']}, 0.86); }}
+    button.suggested-action:hover {{ background: alpha(#{c["primary"]}, 0.86); }}
     button.search-button {{
         min-width: 48px;
         min-height: 48px;
         padding: 0 16px;
         border-radius: 999px;
-        border: 1px solid alpha(#{c['primary']}, 0.85);
-        background-color: #{c['primary']};
-        background-image: linear-gradient(135deg, alpha(#{c['primary']}, 0.98), alpha(#{c['primary']}, 0.72));
-        color: #{c['on_primary']};
+        border: 1px solid alpha(#{c["primary"]}, 0.85);
+        background-color: #{c["primary"]};
+        background-image: linear-gradient(135deg, alpha(#{c["primary"]}, 0.98), alpha(#{c["primary"]}, 0.72));
+        color: #{c["on_primary"]};
         font-weight: 800;
         font-size: 17px;
     }}
     button.search-button:hover {{
-        background-image: linear-gradient(135deg, alpha(#{c['primary']}, 1.0), alpha(#{c['primary']}, 0.82));
-        box-shadow: 0 2px 8px alpha(#{c['primary']}, 0.30);
+        background-image: linear-gradient(135deg, alpha(#{c["primary"]}, 1.0), alpha(#{c["primary"]}, 0.82));
+        box-shadow: 0 2px 8px alpha(#{c["primary"]}, 0.30);
     }}
     button.search-button.browse-search-button {{
         min-width: 42px;
@@ -508,94 +529,94 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         min-height: 42px;
         padding: 0;
         border-radius: 12px;
-        background: alpha(#{c['surface_high']}, 0.72);
-        border: 1px solid alpha(#{c['outline']}, 0.55);
+        background: alpha(#{c["surface_high"]}, 0.72);
+        border: 1px solid alpha(#{c["outline"]}, 0.55);
     }}
     button.pill-button {{
         min-width: 36px;
         min-height: 40px;
         border-radius: 999px;
         padding: 4px 12px;
-        background: alpha(#{c['surface_high']}, 0.75);
-        border: 1px solid alpha(#{c['outline']}, 0.7);
-        color: #{c['muted']};
+        background: alpha(#{c["surface_high"]}, 0.75);
+        border: 1px solid alpha(#{c["outline"]}, 0.7);
+        color: #{c["muted"]};
     }}
-    button.pill-button:hover {{ color: #{c['primary']}; border-color: #{c['primary']}; }}
-    button.pill-button.active {{ color: #{c['primary']}; border-color: #{c['primary']}; }}
-    dropdown.filter-inactive {{ color: #{c['muted']}; opacity: 0.85; }}
+    button.pill-button:hover {{ color: #{c["primary"]}; border-color: #{c["primary"]}; }}
+    button.pill-button.active {{ color: #{c["primary"]}; border-color: #{c["primary"]}; }}
+    dropdown.filter-inactive {{ color: #{c["muted"]}; opacity: 0.85; }}
     button.tab-btn {{
         border-radius: 10px;
         padding: 5px 12px;
         font-weight: 650;
-        border: 1px solid alpha(#{c['outline']}, 0.6);
-        background: alpha(#{c['surface_high']}, 0.58);
-        color: #{c['muted']};
+        border: 1px solid alpha(#{c["outline"]}, 0.6);
+        background: alpha(#{c["surface_high"]}, 0.58);
+        color: #{c["muted"]};
     }}
     button.tab-btn:checked, button.tab-btn.active {{
-        background: alpha(#{c['primary']}, 0.18);
-        color: #{c['primary']};
-        border-color: alpha(#{c['primary']}, 0.7);
+        background: alpha(#{c["primary"]}, 0.18);
+        color: #{c["primary"]};
+        border-color: alpha(#{c["primary"]}, 0.7);
     }}
-    button.link-button {{ color: #{c['primary']}; text-decoration: underline; }}
+    button.link-button {{ color: #{c["primary"]}; text-decoration: underline; }}
     list {{ background: transparent; }}
     row.package-row {{
-        background: alpha(#{c['surface_high']}, 0.52);
+        background: alpha(#{c["surface_high"]}, 0.52);
         border: 1px solid transparent;
         border-left: 3px solid transparent;
         border-radius: 12px;
         margin: {row_margin_v} 8px;
     }}
     row.package-row:hover {{
-        background: alpha(#{c['primary']}, 0.12);
-        border-color: alpha(#{c['primary']}, 0.26);
+        background: alpha(#{c["primary"]}, 0.12);
+        border-color: alpha(#{c["primary"]}, 0.26);
     }}
     row.package-row:selected {{
-        background: alpha(#{c['primary']}, 0.17);
-        border-color: alpha(#{c['primary']}, 0.35);
-        border-left-color: #{c['primary']};
+        background: alpha(#{c["primary"]}, 0.17);
+        border-color: alpha(#{c["primary"]}, 0.35);
+        border-left-color: #{c["primary"]};
     }}
     .package-row-box {{ padding: {row_pad_v} 12px; }}
     .package-row-box.compact {{ padding: 5px 12px; }}
-    .package-icon {{ color: #{c['primary']}; }}
-    .package-name {{ font-weight: 750; font-size: 15px; color: #{c['text']}; }}
-    .repo-meta {{ color: #{c['muted']}; font-size: 12px; font-weight: 600; }}
-    row.github-row {{ background: alpha(#{c['surface_high']}, 0.72); }}
-    row.github-row:hover {{ background: alpha(#{c['primary']}, 0.15); }}
+    .package-icon {{ color: #{c["primary"]}; }}
+    .package-name {{ font-weight: 750; font-size: 15px; color: #{c["text"]}; }}
+    .repo-meta {{ color: #{c["muted"]}; font-size: 12px; font-weight: 600; }}
+    row.github-row {{ background: alpha(#{c["surface_high"]}, 0.72); }}
+    row.github-row:hover {{ background: alpha(#{c["primary"]}, 0.15); }}
     .pill {{
-        background: alpha(#{c['primary']}, 0.16);
-        color: #{c['primary']};
+        background: alpha(#{c["primary"]}, 0.16);
+        color: #{c["primary"]};
         border-radius: 999px;
         padding: 3px 9px;
         font-size: 11px;
         font-weight: 700;
     }}
-    .installed-pill {{ background: alpha(#{c['success']}, 0.18); color: #{c['success']}; }}
-    .orphan-pill {{ background: alpha(#{c['error']}, 0.22); color: #{c['error']}; }}
-    .explicit-pill {{ background: alpha(#{c['primary']}, 0.22); color: #{c['primary']}; }}
-    .star-pill {{ background: alpha(#{c['primary']}, 0.20); color: #{c['primary']}; }}
-    .status-pill {{ background: alpha(#{c['success']}, 0.18); color: #{c['success']}; }}
-    .danger {{ color: #{c['error']}; }}
+    .installed-pill {{ background: alpha(#{c["success"]}, 0.18); color: #{c["success"]}; }}
+    .orphan-pill {{ background: alpha(#{c["error"]}, 0.22); color: #{c["error"]}; }}
+    .explicit-pill {{ background: alpha(#{c["primary"]}, 0.22); color: #{c["primary"]}; }}
+    .star-pill {{ background: alpha(#{c["primary"]}, 0.20); color: #{c["primary"]}; }}
+    .status-pill {{ background: alpha(#{c["success"]}, 0.18); color: #{c["success"]}; }}
+    .danger {{ color: #{c["error"]}; }}
     button.danger {{
-        background: alpha(#{c['error']}, 0.18);
-        color: #{c['error']};
-        border-color: alpha(#{c['error']}, 0.5);
+        background: alpha(#{c["error"]}, 0.18);
+        color: #{c["error"]};
+        border-color: alpha(#{c["error"]}, 0.5);
     }}
-    button.danger:hover {{ background: alpha(#{c['error']}, 0.32); }}
+    button.danger:hover {{ background: alpha(#{c["error"]}, 0.32); }}
     progressbar trough {{
         min-height: 8px;
         border-radius: 999px;
-        background: alpha(#{c['surface_high']}, 0.86);
-        border: 1px solid alpha(#{c['outline']}, 0.72);
+        background: alpha(#{c["surface_high"]}, 0.86);
+        border: 1px solid alpha(#{c["outline"]}, 0.72);
     }}
     progressbar progress {{
         min-height: 8px;
         border-radius: 999px;
-        background: #{c['primary']};
+        background: #{c["primary"]};
     }}
-    progressbar text {{ color: #{c['text']}; font-size: 11px; font-weight: 650; }}
+    progressbar text {{ color: #{c["text"]}; font-size: 11px; font-weight: 650; }}
     .detail-meta {{
-        background: alpha(#{c['surface_high']}, 0.55);
-        border: 1px solid alpha(#{c['outline']}, 0.5);
+        background: alpha(#{c["surface_high"]}, 0.55);
+        border: 1px solid alpha(#{c["outline"]}, 0.5);
         border-radius: 12px;
         padding: 8px 10px;
         font-size: 12px;
@@ -605,12 +626,12 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
     }}
     textview, textview text {{
         background: transparent;
-        color: #{c['text']};
+        color: #{c["text"]};
         font-family: monospace;
         font-size: 12px;
     }}
     textview.readme-text, textview.readme-text text {{
-        color: #{c['text']};
+        color: #{c["text"]};
         font-family: sans-serif;
         font-size: 13px;
     }}
@@ -618,18 +639,18 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         background: transparent;
     }}
     scrollbar slider {{
-        background: alpha(#{c['outline']}, 0.75);
+        background: alpha(#{c["outline"]}, 0.75);
         border-radius: 999px;
         min-width: 6px;
     }}
 
     /* Navigation rail: quiet by default, obvious when you look for it. */
     .nav-rail {{
-        background: alpha(#{c['surface']}, 0.58);
-        border-right: 1px solid alpha(#{c['outline']}, 0.55);
+        background: alpha(#{c["surface"]}, 0.58);
+        border-right: 1px solid alpha(#{c["outline"]}, 0.55);
         min-width: 58px;
     }}
-    .rail-separator {{ background: alpha(#{c['outline']}, 0.55); }}
+    .rail-separator {{ background: alpha(#{c["outline"]}, 0.55); }}
     button.nav-icon {{
         min-width: 44px;
         min-height: 44px;
@@ -637,41 +658,41 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
         border-radius: 12px;
         border-left: 3px solid transparent;
         background: transparent;
-        color: #{c['muted']};
+        color: #{c["muted"]};
     }}
     button.nav-icon:hover {{
-        background: alpha(#{c['primary']}, 0.10);
-        color: #{c['text']};
+        background: alpha(#{c["primary"]}, 0.10);
+        color: #{c["text"]};
     }}
     button.nav-icon.active {{
-        background: alpha(#{c['primary']}, 0.16);
-        border-left-color: #{c['primary']};
-        color: #{c['primary']};
+        background: alpha(#{c["primary"]}, 0.16);
+        border-left-color: #{c["primary"]};
+        color: #{c["primary"]};
     }}
-    button.nav-icon.active .nav-icon-image {{ color: #{c['primary']}; }}
+    button.nav-icon.active .nav-icon-image {{ color: #{c["primary"]}; }}
     .nav-badge {{
-        background: #{c['primary']};
-        color: #{c['on_primary']};
+        background: #{c["primary"]};
+        color: #{c["on_primary"]};
         border-radius: 999px;
         padding: 0 5px;
         font-size: 10px;
         font-weight: 800;
         min-width: 16px;
     }}
-    button.nav-icon.has-badge .nav-badge {{ background: #{c['error']}; color: #{c['background']}; }}
+    button.nav-icon.has-badge .nav-badge {{ background: #{c["error"]}; color: #{c["background"]}; }}
     button.rail-strip {{
         min-width: 10px;
         min-height: 0;
         padding: 0;
         border-radius: 0;
         border: 0;
-        border-right: 1px solid alpha(#{c['outline']}, 0.45);
-        background: alpha(#{c['surface']}, 0.42);
+        border-right: 1px solid alpha(#{c["outline"]}, 0.45);
+        background: alpha(#{c["surface"]}, 0.42);
     }}
-    button.rail-strip:hover {{ background: alpha(#{c['primary']}, 0.28); }}
-    .empty-state {{ color: #{c['muted']}; padding: 32px 18px; }}
-    .empty-state-title {{ font-size: 16px; font-weight: 700; color: #{c['text']}; }}
-    .settings-page, .settings-sidebar {{ background: alpha(#{c['surface']}, 0.42); }}
+    button.rail-strip:hover {{ background: alpha(#{c["primary"]}, 0.28); }}
+    .empty-state {{ color: #{c["muted"]}; padding: 32px 18px; }}
+    .empty-state-title {{ font-size: 16px; font-weight: 700; color: #{c["text"]}; }}
+    .settings-page, .settings-sidebar {{ background: alpha(#{c["surface"]}, 0.42); }}
     .app-root {{ background: transparent; }}
     .status-card {{ padding: 2px 0; }}
     button.danger {{ font-weight: 650; }}
@@ -681,7 +702,9 @@ def install_css(palette_dict: dict[str, str] | None = None, compact: bool | None
     if display:
         if CURRENT_CSS_PROVIDER:
             try:
-                Gtk.StyleContext.remove_provider_for_display(display, CURRENT_CSS_PROVIDER)
+                Gtk.StyleContext.remove_provider_for_display(
+                    display, CURRENT_CSS_PROVIDER
+                )
             except Exception:
                 pass
         provider = Gtk.CssProvider()
@@ -702,9 +725,11 @@ def hex_rgb(value: str, fallback: str = "ffffff") -> tuple[float, float, float]:
     if len(clean) != 6:
         clean = fallback
     try:
-        channels = tuple(int(clean[index:index + 2], 16) / 255 for index in (0, 2, 4))
+        channels = tuple(int(clean[index : index + 2], 16) / 255 for index in (0, 2, 4))
     except ValueError:
-        channels = tuple(int(fallback[index:index + 2], 16) / 255 for index in (0, 2, 4))
+        channels = tuple(
+            int(fallback[index : index + 2], 16) / 255 for index in (0, 2, 4)
+        )
     return channels
 
 
