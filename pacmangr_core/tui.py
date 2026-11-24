@@ -8,18 +8,21 @@ import json
 import os
 import pty
 import queue
-import re
 import shlex
 import subprocess
-import sys
 import textwrap
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import constants
-from .backends import collect_installed_packages, find_appimages, git_package, is_git_url
+from .backends import (
+    collect_installed_packages,
+    find_appimages,
+    git_package,
+    is_git_url,
+)
 from .cache import PackageCache
 from .commands import manager_spec_command, system_update_commands
 from .models import DownloadJob, PackageItem, PackageVersion, Tools, package_key
@@ -35,7 +38,7 @@ from .versions import format_versions, package_versions
 
 
 class PkgUI:
-    def __init__(self, stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
+    def __init__(self, stdscr: curses._CursesWindow, initial_query: str = "") -> None:
         self.stdscr = stdscr
         self.tools = Tools.detect()
         self.cache = PackageCache()
@@ -70,7 +73,7 @@ class PkgUI:
         self.busy = False
         self.busy_label = ""
         self.spinner_index = 0
-        self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
+        self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.pending_search_query: str | None = None
         self.active_search_query = ""
         self.last_installed_load = 0.0
@@ -103,7 +106,9 @@ class PkgUI:
         pairs = None
         scheme_path = Path.home() / ".local/state/caelestia/scheme.json"
         try:
-            colours = json.loads(scheme_path.read_text(encoding="utf-8")).get("colours", {})
+            colours = json.loads(scheme_path.read_text(encoding="utf-8")).get(
+                "colours", {}
+            )
             if not isinstance(colours, dict):
                 colours = {}
         except (OSError, ValueError, TypeError):
@@ -121,7 +126,9 @@ class PkgUI:
             try:
                 for colour_id, value, fallback in roles:
                     rgb = str(value or fallback).strip().lstrip("#")[:6]
-                    red, green, blue = (int(rgb[index:index + 2], 16) for index in (0, 2, 4))
+                    red, green, blue = (
+                        int(rgb[index : index + 2], 16) for index in (0, 2, 4)
+                    )
                     curses.init_color(
                         colour_id,
                         round(red * 1000 / 255),
@@ -171,7 +178,9 @@ class PkgUI:
     def apply_installed_items(self, items: list[PackageItem]) -> None:
         self.installed_items = items
         self.installed_names = {
-            item.package_id for item in self.installed_items if item.source in ("pacman", "aur/local")
+            item.package_id
+            for item in self.installed_items
+            if item.source in ("pacman", "aur/local")
         }
         self.installed_apt_names = {
             item.package_id for item in self.installed_items if item.source == "apt"
@@ -235,11 +244,15 @@ class PkgUI:
                     job.code = int(code)
                     job.status = "done" if job.code == 0 else "failed"
                     job.finished = time.time()
-                    self.log(f"Download job {job.status}: {job.label} exited {job.code}")
+                    self.log(
+                        f"Download job {job.status}: {job.label} exited {job.code}"
+                    )
                 continue
             if event == "download_queue_done":
                 self.download_thread_active = False
-                failures = sum(1 for job in self.download_jobs if job.status == "failed")
+                failures = sum(
+                    1 for job in self.download_jobs if job.status == "failed"
+                )
                 self.status = f"Download queue finished. {failures} failed."
                 self.refresh_installed(background=True)
                 continue
@@ -272,7 +285,9 @@ class PkgUI:
                         self.apply_installed_items(result)  # type: ignore[arg-type]
                         self.cache.save_installed(self.installed_items)
                         self.last_installed_load = time.time()
-                        self.status = f"Loaded {len(self.installed_items)} installed packages."
+                        self.status = (
+                            f"Loaded {len(self.installed_items)} installed packages."
+                        )
                         self.log(self.status)
                     elif label.startswith("loading versions"):
                         versions = result if isinstance(result, list) else []
@@ -287,7 +302,11 @@ class PkgUI:
                         self.version_cursor = 0
                         self.version_scroll = 0
                         self.status = f"Loaded {len(self.version_rows)} versions for {self.version_pending_package}."
-                        self.log(format_versions(self.version_pending_package, self.version_rows))
+                        self.log(
+                            format_versions(
+                                self.version_pending_package, self.version_rows
+                            )
+                        )
                     elif label.startswith("loading info"):
                         self.mode = "log"
                         self.selected = len(self.log_lines) - 1
@@ -320,9 +339,13 @@ class PkgUI:
         self.scroll = 0
         cached = self.cache.load_search(query, self.enabled_search_managers("all"))
         if cached:
-            self.search_results = self.rank_results(self.dedupe_items(cached), query)[:constants.MAX_RESULTS]
+            self.search_results = self.rank_results(self.dedupe_items(cached), query)[
+                : constants.MAX_RESULTS
+            ]
             self.refresh_marked_metadata(self.search_results)
-            self.status = f"Loaded {len(self.search_results)} cached results; refreshing live."
+            self.status = (
+                f"Loaded {len(self.search_results)} cached results; refreshing live."
+            )
             self.log(self.status)
         else:
             self.search_results = []
@@ -406,7 +429,11 @@ class PkgUI:
     def rank_results(self, items: list[PackageItem], query: str) -> list[PackageItem]:
         return sorted(
             items,
-            key=lambda item: (-self.result_score(item, query), item.name.lower(), item.source),
+            key=lambda item: (
+                -self.result_score(item, query),
+                item.name.lower(),
+                item.source,
+            ),
         )
 
     def search_packages(
@@ -418,7 +445,9 @@ class PkgUI:
         results: list[PackageItem] = []
         seen: set[tuple[str, str]] = set()
         per_manager_limit = 80 if backend == "all" else constants.MAX_RESULTS
-        jobs: list[tuple[str, Callable[[], tuple[str, list[PackageItem], bool, str]]]] = []
+        jobs: list[
+            tuple[str, Callable[[], tuple[str, list[PackageItem], bool, str]]]
+        ] = []
 
         def add_many(items: list[PackageItem], limit: int = per_manager_limit) -> None:
             added = 0
@@ -433,7 +462,9 @@ class PkgUI:
                 added += 1
 
         def timeout_for(manager: str) -> int:
-            return constants.SEARCH_TIMEOUT_SECONDS.get(manager, 10 if backend == "all" else 20)
+            return constants.SEARCH_TIMEOUT_SECONDS.get(
+                manager, 10 if backend == "all" else 20
+            )
 
         def command_job(
             manager: str,
@@ -444,21 +475,30 @@ class PkgUI:
             def run() -> tuple[str, list[PackageItem], bool, str]:
                 code, output = run_capture(cmd, timeout=timeout_for(manager))
                 if code not in (0, 1):
-                    return manager, [], False, f"{label} exited {code}:\n{output.strip()}"
+                    return (
+                        manager,
+                        [],
+                        False,
+                        f"{label} exited {code}:\n{output.strip()}",
+                    )
                 return manager, parser(output), True, ""
 
             return run
 
         if backend in ("all", "pacman") and self.tools.pacman:
-            jobs.append((
-                "pacman",
-                command_job(
+            jobs.append(
+                (
                     "pacman",
-                    "pacman search",
-                    [self.tools.pacman, "-Ss", query],
-                    lambda output: parse_arch_search(output, "pacman", self.installed_names),
-                ),
-            ))
+                    command_job(
+                        "pacman",
+                        "pacman search",
+                        [self.tools.pacman, "-Ss", query],
+                        lambda output: parse_arch_search(
+                            output, "pacman", self.installed_names
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "git") and self.tools.git and is_git_url(query):
             item = git_package(query)
@@ -466,65 +506,87 @@ class PkgUI:
                 jobs.append(("git", lambda package=item: ("git", [package], True, "")))
 
         if backend in ("all", "yay") and self.tools.yay:
-            jobs.append((
-                "yay",
-                command_job(
+            jobs.append(
+                (
                     "yay",
-                    "yay AUR search",
-                    [self.tools.yay, "-Ssa", query],
-                    lambda output: parse_arch_search(output, "yay", self.installed_names, "aur"),
-                ),
-            ))
+                    command_job(
+                        "yay",
+                        "yay AUR search",
+                        [self.tools.yay, "-Ssa", query],
+                        lambda output: parse_arch_search(
+                            output, "yay", self.installed_names, "aur"
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "paru") and self.tools.paru:
-            jobs.append((
-                "paru",
-                command_job(
+            jobs.append(
+                (
                     "paru",
-                    "paru AUR search",
-                    [self.tools.paru, "-Ssa", query],
-                    lambda output: parse_arch_search(output, "paru", self.installed_names, "aur"),
-                ),
-            ))
+                    command_job(
+                        "paru",
+                        "paru AUR search",
+                        [self.tools.paru, "-Ssa", query],
+                        lambda output: parse_arch_search(
+                            output, "paru", self.installed_names, "aur"
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "flatpak") and self.tools.flatpak:
-            jobs.append((
-                "flatpak",
-                command_job(
+            jobs.append(
+                (
                     "flatpak",
-                    "flatpak search",
-                    [self.tools.flatpak, "search", "--json", query],
-                    lambda output: parse_flatpak_search(output, self.installed_flatpak_ids),
-                ),
-            ))
+                    command_job(
+                        "flatpak",
+                        "flatpak search",
+                        [self.tools.flatpak, "search", "--json", query],
+                        lambda output: parse_flatpak_search(
+                            output, self.installed_flatpak_ids
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "apt") and self.tools.apt_cache:
-            jobs.append((
-                "apt",
-                command_job(
+            jobs.append(
+                (
                     "apt",
-                    "apt-cache search",
-                    [self.tools.apt_cache, "search", query],
-                    lambda output: parse_apt_search(output, self.installed_apt_names),
-                ),
-            ))
+                    command_job(
+                        "apt",
+                        "apt-cache search",
+                        [self.tools.apt_cache, "search", query],
+                        lambda output: parse_apt_search(
+                            output, self.installed_apt_names
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "snap") and self.tools.snap:
-            jobs.append((
-                "snap",
-                command_job(
+            jobs.append(
+                (
                     "snap",
-                    "snap find",
-                    [self.tools.snap, "find", query],
-                    lambda output: parse_snap_search(output, self.installed_snap_names),
-                ),
-            ))
+                    command_job(
+                        "snap",
+                        "snap find",
+                        [self.tools.snap, "find", query],
+                        lambda output: parse_snap_search(
+                            output, self.installed_snap_names
+                        ),
+                    ),
+                )
+            )
 
         if backend in ("all", "appimage"):
-            jobs.append((
-                "appimage",
-                lambda: ("appimage", find_appimages(query), True, ""),
-            ))
+            jobs.append(
+                (
+                    "appimage",
+                    lambda: ("appimage", find_appimages(query), True, ""),
+                )
+            )
 
         if backend == "all" or backend in self.tools.extra_managers:
             for manager in self.tools.extra_managers:
@@ -536,26 +598,27 @@ class PkgUI:
                 cmd = manager_spec_command(manager, "search", self.tools, query=query)
                 if not cmd:
                     continue
-                jobs.append((
-                    manager,
-                    command_job(
+                jobs.append(
+                    (
                         manager,
-                        f"{manager} search",
-                        cmd,
-                        lambda output, name=manager: parse_manager_search(
-                            name,
-                            output,
-                            self.installed_extra_names.get(name, set()),
+                        command_job(
+                            manager,
+                            f"{manager} search",
+                            cmd,
+                            lambda output, name=manager: parse_manager_search(
+                                name,
+                                output,
+                                self.installed_extra_names.get(name, set()),
+                            ),
                         ),
-                    ),
-                ))
+                    )
+                )
 
         if jobs:
             workers = max(1, min(constants.SEARCH_WORKERS, len(jobs)))
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 future_to_manager = {
-                    executor.submit(job): manager
-                    for manager, job in jobs
+                    executor.submit(job): manager for manager, job in jobs
                 }
                 for future in concurrent.futures.as_completed(future_to_manager):
                     manager = future_to_manager[future]
@@ -571,11 +634,15 @@ class PkgUI:
                     add_many(parsed)
                     if on_results is not None:
                         try:
-                            on_results(self.rank_results(list(results), query)[:constants.MAX_RESULTS])
+                            on_results(
+                                self.rank_results(list(results), query)[
+                                    : constants.MAX_RESULTS
+                                ]
+                            )
                         except Exception as exc:  # Keep optional UI updates from interrupting backend searches.
                             self.log(f"Search result update failed: {exc}")
 
-        return self.rank_results(results, query)[:constants.MAX_RESULTS]
+        return self.rank_results(results, query)[: constants.MAX_RESULTS]
 
     def refresh_installed(self, background: bool = False) -> None:
         def job() -> list[PackageItem]:
@@ -594,7 +661,9 @@ class PkgUI:
             selected_items = self.marked_items()
             selected_keys = {package_key(item) for item in selected_items}
             return selected_items + [
-                item for item in self.search_results if package_key(item) not in selected_keys
+                item
+                for item in self.search_results
+                if package_key(item) not in selected_keys
             ]
         if self.mode == "installed":
             if not self.installed_filter:
@@ -675,7 +744,9 @@ class PkgUI:
         return None
 
     def active_download_jobs(self) -> list[DownloadJob]:
-        return [job for job in self.download_jobs if job.status in {"queued", "running"}]
+        return [
+            job for job in self.download_jobs if job.status in {"queued", "running"}
+        ]
 
     def apply_download_line(self, job: DownloadJob, raw_line: str) -> None:
         line = strip_ansi(raw_line).strip()
@@ -802,7 +873,11 @@ class PkgUI:
             curses.echo()
         self.stdscr.timeout(-1)
         try:
-            raw = self.stdscr.getstr(h - 1, min(len(prompt_text), max(0, w - 1)), max(1, w - len(prompt_text) - 1))
+            raw = self.stdscr.getstr(
+                h - 1,
+                min(len(prompt_text), max(0, w - 1)),
+                max(1, w - len(prompt_text) - 1),
+            )
         except curses.error:
             raw = b""
         finally:
@@ -845,7 +920,9 @@ class PkgUI:
         codes = self.run_interactive_commands(title, [(title, cmd)])
         return codes[-1] if codes else 1
 
-    def run_interactive_commands(self, title: str, commands: list[tuple[str, list[str]]]) -> list[int]:
+    def run_interactive_commands(
+        self, title: str, commands: list[tuple[str, list[str]]]
+    ) -> list[int]:
         if not commands:
             return []
         command_count = len(commands)
@@ -858,7 +935,9 @@ class PkgUI:
         try:
             print()
             print(f"{constants.APP_NAME}: {title}")
-            print(f"{command_count} command(s) queued. Password prompts and download progress stay native.")
+            print(
+                f"{command_count} command(s) queued. Password prompts and download progress stay native."
+            )
             print()
             for index, (label, cmd) in enumerate(commands, start=1):
                 command_text = shlex.join(cmd)
@@ -883,7 +962,9 @@ class PkgUI:
                     if not self.terminal_confirm("Continue with remaining commands?"):
                         break
             failures = sum(1 for code in codes if code != 0)
-            print(f"{constants.APP_NAME}: finished {len(codes)}/{command_count} command(s), {failures} failed.")
+            print(
+                f"{constants.APP_NAME}: finished {len(codes)}/{command_count} command(s), {failures} failed."
+            )
             self.wait_for_return()
         finally:
             curses.reset_prog_mode()
@@ -891,13 +972,19 @@ class PkgUI:
             self.stdscr.timeout(120)
             self.set_cursor(False)
         failures = sum(1 for code in codes if code != 0)
-        self.status = f"Finished {len(codes)}/{command_count} command(s), {failures} failed."
+        self.status = (
+            f"Finished {len(codes)}/{command_count} command(s), {failures} failed."
+        )
         self.refresh_installed(background=True)
         return codes
 
     def prepare_background_command(self, cmd: list[str], action: str) -> list[str]:
         prepared = list(cmd)
-        real_index = 1 if self.command_uses_sudo(prepared) or self.command_uses_doas(prepared) else 0
+        real_index = (
+            1
+            if self.command_uses_sudo(prepared) or self.command_uses_doas(prepared)
+            else 0
+        )
         if real_index >= len(prepared):
             return prepared
         tool = Path(prepared[real_index]).name
@@ -915,7 +1002,10 @@ class PkgUI:
                 prepared.insert(min(real_index + 2, len(prepared)), option)
 
         if tool in {"pacman", "yay", "paru"} and "--noconfirm" not in prepared:
-            if any(arg.startswith("-S") or arg.startswith("-R") for arg in prepared[real_index + 1 :]):
+            if any(
+                arg.startswith("-S") or arg.startswith("-R")
+                for arg in prepared[real_index + 1 :]
+            ):
                 insert_after_tool("--noconfirm")
         if tool in {"yay", "paru"}:
             insert_pair_after_tool("--sudoflags", f"-S -p {constants.SUDO_PROMPT}")
@@ -934,7 +1024,10 @@ class PkgUI:
         elif tool == "flatpak" and action in {"install", "remove", "update"}:
             insert_after_subcommand("-y")
         elif tool in {"apt", "apt-get"}:
-            if any(arg in {"install", "remove", "upgrade", "full-upgrade"} for arg in prepared):
+            if any(
+                arg in {"install", "remove", "upgrade", "full-upgrade"}
+                for arg in prepared
+            ):
                 insert_after_subcommand("-y")
         elif tool == "pip" and "uninstall" in prepared:
             insert_after_subcommand("-y")
@@ -954,7 +1047,9 @@ class PkgUI:
         return [cmd[0], "-S", "-p", "", *cmd[1:]]
 
     def ensure_sudo_password(self, commands: list[tuple[str, list[str]]]) -> str | None:
-        sudo_commands = [cmd for _, cmd in commands if self.command_needs_sudo_password(cmd)]
+        sudo_commands = [
+            cmd for _, cmd in commands if self.command_needs_sudo_password(cmd)
+        ]
         doas_commands = [cmd for _, cmd in commands if self.command_uses_doas(cmd)]
         if doas_commands:
             self.status = "Background password entry currently supports sudo, not doas."
@@ -1037,14 +1132,18 @@ class PkgUI:
             daemon=True,
         ).start()
 
-    def run_download_queue(self, jobs: list[tuple[int, list[str]]], password: str) -> None:
+    def run_download_queue(
+        self, jobs: list[tuple[int, list[str]]], password: str
+    ) -> None:
         try:
             for job_id, cmd in jobs:
                 self.events.put(("download_started", job_id))
                 try:
                     code = self.run_download_process(job_id, cmd, password)
                 except Exception as exc:  # noqa: BLE001 - keep the TUI alive and surface the failure.
-                    self.events.put(("download_line", (job_id, f"runner failed: {exc}")))
+                    self.events.put(
+                        ("download_line", (job_id, f"runner failed: {exc}"))
+                    )
                     code = 1
                 self.events.put(("download_done", (job_id, code)))
         finally:
@@ -1117,7 +1216,9 @@ class PkgUI:
             self.show_info()
             return
 
-        already_installed = [item for item in targets if item.installed and item.source != "appimage"]
+        already_installed = [
+            item for item in targets if item.installed and item.source != "appimage"
+        ]
         if already_installed and not self.confirm(
             f"{self.package_summary(already_installed)} already installed. Reinstall anyway?"
         ):
@@ -1134,8 +1235,12 @@ class PkgUI:
             self.status = "Install cancelled."
             return
         grouped = self.collapse_package_commands(pairs)
-        commands = [(self.package_summary(group_items), cmd) for group_items, cmd in grouped]
-        self.start_background_commands("installing selected packages", commands, "install")
+        commands = [
+            (self.package_summary(group_items), cmd) for group_items, cmd in grouped
+        ]
+        self.start_background_commands(
+            "installing selected packages", commands, "install"
+        )
 
     def remove_selected(self) -> None:
         targets = self.operation_targets()
@@ -1154,7 +1259,9 @@ class PkgUI:
             self.status = "Remove cancelled."
             return
         grouped = self.collapse_package_commands(pairs)
-        commands = [(self.package_summary(group_items), cmd) for group_items, cmd in grouped]
+        commands = [
+            (self.package_summary(group_items), cmd) for group_items, cmd in grouped
+        ]
         self.start_background_commands("removing selected packages", commands, "remove")
 
     def update_system(self) -> None:
@@ -1168,7 +1275,11 @@ class PkgUI:
         self.start_background_commands("updating packages", commands, "update")
 
     def version_cache_manager(self, item: PackageItem) -> str:
-        if item.source in {"pacman", "aur", "aur/local"} or item.manager in {"pacman", "yay", "paru"}:
+        if item.source in {"pacman", "aur", "aur/local"} or item.manager in {
+            "pacman",
+            "yay",
+            "paru",
+        }:
             return "downgrade"
         return item.manager or item.source
 
@@ -1231,7 +1342,9 @@ class PkgUI:
             stat = path.stat()
             self.log(f"size: {human_size(stat.st_size)}")
             self.log(f"mode: {oct(stat.st_mode & 0o777)}")
-            self.log(f"modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))}")
+            self.log(
+                f"modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))}"
+            )
             self.log(f"executable: {'yes' if os.access(path, os.X_OK) else 'no'}")
         except OSError as exc:
             self.log(f"stat failed: {exc}")
@@ -1349,7 +1462,9 @@ class PkgUI:
             if self.mode == "installed":
                 self.refresh_installed(background=False)
             elif self.mode == "search" and self.query:
-                self.spawn_job("searching", lambda: self.search_packages(self.query, "all"))
+                self.spawn_job(
+                    "searching", lambda: self.search_packages(self.query, "all")
+                )
             else:
                 self.status = "Nothing to refresh."
             return
@@ -1378,7 +1493,9 @@ class PkgUI:
             if self.mode == "installed" or self.marked:
                 self.remove_selected()
             else:
-                self.status = "Switch to installed view with i before removing packages."
+                self.status = (
+                    "Switch to installed view with i before removing packages."
+                )
             return
         if ch == ord("?"):
             self.show_help()
@@ -1412,7 +1529,9 @@ class PkgUI:
     def selected_version(self) -> PackageVersion | None:
         if not self.version_rows:
             return None
-        self.version_cursor = max(0, min(self.version_cursor, len(self.version_rows) - 1))
+        self.version_cursor = max(
+            0, min(self.version_cursor, len(self.version_rows) - 1)
+        )
         return self.version_rows[self.version_cursor]
 
     def install_selected_version(self, pin: bool = False) -> None:
@@ -1422,8 +1541,12 @@ class PkgUI:
             self.status = "No version selected."
             return
         pin_text = " with pin" if pin else ""
-        self.status = f"Selected {item.package_id} {version.version} for downgrade{pin_text}."
-        self.log(f"version selected: {item.package_id} -> {version.version} ({version.origin or version.manager})")
+        self.status = (
+            f"Selected {item.package_id} {version.version} for downgrade{pin_text}."
+        )
+        self.log(
+            f"version selected: {item.package_id} -> {version.version} ({version.origin or version.manager})"
+        )
 
     def show_help(self) -> None:
         help_text = [
@@ -1526,10 +1649,22 @@ class PkgUI:
             "brew",
         )
         parts = [f"{key}:{counts[key]}" for key in preferred if key in counts]
-        parts.extend(f"{key}:{value}" for key, value in sorted(counts.items()) if key not in preferred)
+        parts.extend(
+            f"{key}:{value}"
+            for key, value in sorted(counts.items())
+            if key not in preferred
+        )
         return "sources: " + " ".join(parts)
 
-    def draw_box(self, y: int, x: int, height: int, width: int, title: str = "", active: bool = False) -> None:
+    def draw_box(
+        self,
+        y: int,
+        x: int,
+        height: int,
+        width: int,
+        title: str = "",
+        active: bool = False,
+    ) -> None:
         if height <= 1 or width <= 2:
             return
         attr = curses.color_pair(1) | curses.A_BOLD if active else curses.A_DIM
@@ -1568,7 +1703,12 @@ class PkgUI:
         header_h = self.header_height(w)
         self.draw_box(0, 0, header_h, w, " PACKAGE MANAGER ", active=True)
         title = f"{constants.APP_NAME} {constants.VERSION}"
-        self.safe_addstr(1, max(1, (w - len(title)) // 2), clip(title, w - 4), curses.color_pair(1) | curses.A_BOLD)
+        self.safe_addstr(
+            1,
+            max(1, (w - len(title)) // 2),
+            clip(title, w - 4),
+            curses.color_pair(1) | curses.A_BOLD,
+        )
 
         tabs = [
             ("s", "Search", self.mode == "search"),
@@ -1579,7 +1719,9 @@ class PkgUI:
         y = header_h - 2
         for key, label, active in tabs:
             text = f"[{key.upper()}:{label.upper()}]"
-            attr = curses.color_pair(2) | curses.A_BOLD if active else curses.color_pair(1)
+            attr = (
+                curses.color_pair(2) | curses.A_BOLD if active else curses.color_pair(1)
+            )
             self.safe_addstr(y, x, text[: max(0, w - x - 2)], attr)
             x += len(text) + 1
 
@@ -1595,7 +1737,9 @@ class PkgUI:
         detail_w = w - detail_x
         rows_available = max(1, height - 4)
         self.ensure_visible(rows_available)
-        visible = items[self.scroll : self.scroll + rows_available]
+        visible = items[
+            self.scroll : self.scroll + rows_available
+        ]  # what is this for??
 
         if self.mode == "search":
             title = f" SEARCH :: {len(items)} RESULTS "
@@ -1616,7 +1760,9 @@ class PkgUI:
                 empty = "No installed packages loaded."
             if self.busy:
                 empty = f"{self.busy_label}..."
-            self.safe_addstr(row_start, 2, clip(empty, max(1, inner_w - 2)), curses.A_DIM)
+            self.safe_addstr(
+                row_start, 2, clip(empty, max(1, inner_w - 2)), curses.A_DIM
+            )
         row_y = row_start
         index = self.scroll
         bottom_y = top + height - 1
@@ -1672,11 +1818,17 @@ class PkgUI:
         current = self.version_cursor + 1 if total else 0
 
         header = f"  ├─ versions {current}/{total} {up}{down}"
-        self.safe_addstr(y, x, clip(header, width), curses.color_pair(1) | curses.A_BOLD)
+        self.safe_addstr(
+            y, x, clip(header, width), curses.color_pair(1) | curses.A_BOLD
+        )
         y += 1
 
         if not self.version_rows:
-            msg = "  │  loading versions..." if self.busy_label.startswith("loading versions") else "  │  no versions found"
+            msg = (
+                "  │  loading versions..."
+                if self.busy_label.startswith("loading versions")
+                else "  │  no versions found"
+            )
             self.safe_addstr(y, x, clip(msg, width), curses.A_DIM)
             y += 1
         else:
@@ -1687,7 +1839,11 @@ class PkgUI:
                 focused = version_index == self.version_cursor
                 attr = curses.color_pair(2) if focused else curses.A_NORMAL
                 marker = ">" if focused else " "
-                state = "installed" if version.installed else (version.origin or version.manager or "remote")
+                state = (
+                    "installed"
+                    if version.installed
+                    else (version.origin or version.manager or "remote")
+                )
 
                 line = f"  │  {marker} {version.version:<16} {state}"
                 self.safe_addstr(y, x, clip(line, width), attr)
@@ -1732,7 +1888,9 @@ class PkgUI:
                 for version in self.version_rows[:6]:
                     installed = " *" if version.installed else ""
                     origin = f" [{version.origin}]" if version.origin else ""
-                    lines.append(f"{version.version}{installed} - {version.manager}{origin}")
+                    lines.append(
+                        f"{version.version}{installed} - {version.manager}{origin}"
+                    )
                 if len(self.version_rows) > 6:
                     lines.append(f"+{len(self.version_rows) - 6} more in log")
             elif self.busy_label.startswith("loading versions"):
@@ -1764,7 +1922,9 @@ class PkgUI:
         jobs = self.download_jobs[-max(1, inner_h // 2) :]
         if not jobs:
             self.safe_addstr(inner_y, inner_x, "idle", curses.A_DIM)
-            self.safe_addstr(inner_y + 1, inner_x, "background installs appear here", curses.A_DIM)
+            self.safe_addstr(
+                inner_y + 1, inner_x, "background installs appear here", curses.A_DIM
+            )
             return
 
         row = 0
@@ -1773,7 +1933,9 @@ class PkgUI:
                 break
             symbol = {
                 "queued": ".",
-                "running": constants.SPINNER[self.spinner_index % len(constants.SPINNER)],
+                "running": constants.SPINNER[
+                    self.spinner_index % len(constants.SPINNER)
+                ],
                 "done": "+",
                 "failed": "!",
             }.get(job.status, "?")
@@ -1791,7 +1953,9 @@ class PkgUI:
             if row >= inner_h:
                 break
             detail = job.last_line or shlex.join(job.cmd)
-            self.safe_addstr(inner_y + row, inner_x, clip(detail, inner_w), curses.A_DIM)
+            self.safe_addstr(
+                inner_y + row, inner_x, clip(detail, inner_w), curses.A_DIM
+            )
             row += 1
 
     def draw_log(self, h: int, w: int) -> None:
@@ -1801,7 +1965,12 @@ class PkgUI:
         rows_available = max(1, height - 3)
         self.ensure_visible(rows_available)
         total = len(self.log_lines)
-        self.safe_addstr(top + 1, 1, clip(f"{total} lines | r refresh current section | ? help", w - 2), curses.color_pair(1) | curses.A_BOLD)
+        self.safe_addstr(
+            top + 1,
+            1,
+            clip(f"{total} lines | r refresh current section | ? help", w - 2),
+            curses.color_pair(1) | curses.A_BOLD,
+        )
         start = max(0, min(self.scroll, max(0, total - rows_available)))
         lines = self.log_lines[start : start + rows_available]
         for offset, line in enumerate(lines):
@@ -1850,7 +2019,7 @@ class PkgUI:
 def headless_ui(
     tools: Tools | None = None,
     cache: PackageCache | None = None,
-) -> "PkgUI":
+) -> PkgUI:
     """Build the search engine without initializing curses."""
     app = PkgUI.__new__(PkgUI)
     app.tools = tools or Tools.detect()
@@ -1867,6 +2036,6 @@ def headless_ui(
     return app
 
 
-def main(stdscr: "curses._CursesWindow", initial_query: str = "") -> None:
+def main(stdscr: curses._CursesWindow, initial_query: str = "") -> None:
     app = PkgUI(stdscr, initial_query)
     app.run()
