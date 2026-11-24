@@ -1,5 +1,7 @@
 """Persistent preferences and the categorised settings dialog."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -9,9 +11,9 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk
 
-from .core_loader import CORE  # noqa: E402
+from .core_loader import CORE
 
 SETTINGS_PATH = Path.home() / ".config/pacmangr/gui_settings.json"
 
@@ -108,7 +110,9 @@ class SettingsManager:
         self.save()
 
     def get(self, key: str, default=None):
-        return self.data.get(key, default if default is not None else self.DEFAULTS.get(key))
+        return self.data.get(
+            key, default if default is not None else self.DEFAULTS.get(key)
+        )
 
     def set(self, key: str, value) -> None:
         self.data[key] = value
@@ -133,7 +137,9 @@ class SettingsDialog(Gtk.Window):
 
     def __init__(self, app) -> None:
         parent = getattr(app, "window", None)
-        super().__init__(transient_for=parent if isinstance(parent, Gtk.Window) else None, modal=True)
+        super().__init__(
+            transient_for=parent if isinstance(parent, Gtk.Window) else None, modal=True
+        )
         self.app = app
         self.set_title("Pacmangr Settings")
         self.set_default_size(860, 640)
@@ -149,7 +155,9 @@ class SettingsDialog(Gtk.Window):
 
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(False)
-        header.set_title_widget(Gtk.Label(label="Settings", css_classes=["title-label"]))
+        header.set_title_widget(
+            Gtk.Label(label="Settings", css_classes=["title-label"])
+        )
 
         cancel = Gtk.Button(label="Cancel")
         cancel.connect("clicked", lambda *_: self.close())
@@ -231,7 +239,14 @@ class SettingsDialog(Gtk.Window):
         row.append(labels)
         return row
 
-    def _switch(self, box: Gtk.Box, key: str, title: str, subtitle: str = "", active: bool = False) -> Gtk.Switch:
+    def _switch(
+        self,
+        box: Gtk.Box,
+        key: str,
+        title: str,
+        subtitle: str = "",
+        active: bool = False,
+    ) -> Gtk.Switch:
         row = self._row(title, subtitle)
         widget = Gtk.Switch()
         widget.set_active(bool(active))
@@ -241,8 +256,15 @@ class SettingsDialog(Gtk.Window):
         self.controls[key] = ("switch", widget, None)
         return widget
 
-    def _dropdown(self, box: Gtk.Box, key: str, title: str, subtitle: str,
-                  options: list[tuple[str, object]], current) -> Gtk.DropDown:
+    def _dropdown(
+        self,
+        box: Gtk.Box,
+        key: str,
+        title: str,
+        subtitle: str,
+        options: list[tuple[str, object]],
+        current,
+    ) -> Gtk.DropDown:
         row = self._row(title, subtitle)
         widget = Gtk.DropDown.new_from_strings([label for label, _ in options])
         values = [value for _, value in options]
@@ -257,8 +279,15 @@ class SettingsDialog(Gtk.Window):
         self.controls[key] = ("dropdown", widget, values)
         return widget
 
-    def _entry(self, box: Gtk.Box, key: str, title: str, subtitle: str,
-               value: str, placeholder: str = "") -> Gtk.Entry:
+    def _entry(
+        self,
+        box: Gtk.Box,
+        key: str,
+        title: str,
+        subtitle: str,
+        value: str,
+        placeholder: str = "",
+    ) -> Gtk.Entry:
         row = self._row(title, subtitle)
         widget = Gtk.Entry()
         widget.set_text(str(value or ""))
@@ -270,8 +299,17 @@ class SettingsDialog(Gtk.Window):
         self.controls[key] = ("entry", widget, None)
         return widget
 
-    def _spin(self, box: Gtk.Box, key: str, title: str, subtitle: str,
-              value, minimum: float, maximum: float, step: float) -> Gtk.SpinButton:
+    def _spin(
+        self,
+        box: Gtk.Box,
+        key: str,
+        title: str,
+        subtitle: str,
+        value,
+        minimum: float,
+        maximum: float,
+        step: float,
+    ) -> Gtk.SpinButton:
         row = self._row(title, subtitle)
         widget = Gtk.SpinButton.new_with_range(minimum, maximum, step)
         widget.set_value(float(value))
@@ -281,7 +319,9 @@ class SettingsDialog(Gtk.Window):
         self.controls[key] = ("spin", widget, None)
         return widget
 
-    def _file(self, box: Gtk.Box, key: str, title: str, subtitle: str, value: str) -> Gtk.Entry:
+    def _file(
+        self, box: Gtk.Box, key: str, title: str, subtitle: str, value: str
+    ) -> Gtk.Entry:
         row = self._row(title, subtitle)
         group = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         entry = Gtk.Entry()
@@ -296,7 +336,9 @@ class SettingsDialog(Gtk.Window):
         self.controls[key] = ("entry", entry, None)
         return entry
 
-    def _action(self, box: Gtk.Box, title: str, subtitle: str, label: str, callback) -> Gtk.Button:
+    def _action(
+        self, box: Gtk.Box, title: str, subtitle: str, label: str, callback
+    ) -> Gtk.Button:
         row = self._row(title, subtitle)
         button = Gtk.Button(label=label)
         button.connect("clicked", callback)
@@ -304,8 +346,15 @@ class SettingsDialog(Gtk.Window):
         box.append(row)
         return button
 
-    def _checks(self, box: Gtk.Box, key: str, title: str, subtitle: str,
-                options: list[tuple[str, str]], current: dict) -> None:
+    def _checks(
+        self,
+        box: Gtk.Box,
+        key: str,
+        title: str,
+        subtitle: str,
+        options: list[tuple[str, str]],
+        current: dict,
+    ) -> None:
         self._section(box, title)
         if subtitle:
             label = Gtk.Label(label=subtitle, xalign=0)
@@ -326,7 +375,9 @@ class SettingsDialog(Gtk.Window):
             transient_for=self,
             action=Gtk.FileChooserAction.OPEN,
         )
-        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Open", Gtk.ResponseType.ACCEPT)
+        dialog.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL, "Open", Gtk.ResponseType.ACCEPT
+        )
 
         def response(_dialog, result):
             if result == Gtk.ResponseType.ACCEPT:
@@ -345,41 +396,73 @@ class SettingsDialog(Gtk.Window):
         box = self._page(*self.CATEGORIES[0])
         self._section(box, "STARTUP")
         self._dropdown(
-            box, "default_view", "Default view", "Which view opens when pacmangr starts.",
-            [("Browse & Install", "browse"), ("Installed", "installed"),
-             ("Updates", "updates"), ("GitHub", "github"),
-             ("Orphaned Packages", "orphans")],
+            box,
+            "default_view",
+            "Default view",
+            "Which view opens when pacmangr starts.",
+            [
+                ("Browse & Install", "browse"),
+                ("Installed", "installed"),
+                ("Updates", "updates"),
+                ("GitHub", "github"),
+                ("Orphaned Packages", "orphans"),
+            ],
             SETTINGS.get("default_view", "browse"),
         )
         self._switch(
-            box, "sidebar_collapsed", "Collapse navigation rail",
+            box,
+            "sidebar_collapsed",
+            "Collapse navigation rail",
             "Start with the slim icon rail collapsed to a thin edge strip (Ctrl+B).",
             SETTINGS.get("sidebar_collapsed", False),
         )
         self._switch(
-            box, "restore_last_source", "Restore last source", "Remember the selected package source between runs.",
+            box,
+            "restore_last_source",
+            "Restore last source",
+            "Remember the selected package source between runs.",
             SETTINGS.get("restore_last_source", True),
         )
         self._switch(
-            box, "persist_window_geometry", "Remember window size", "Save window dimensions and maximized state.",
+            box,
+            "persist_window_geometry",
+            "Remember window size",
+            "Save window dimensions and maximized state.",
             SETTINGS.get("persist_window_geometry", True),
         )
 
         self._section(box, "RESULTS")
         self._spin(
-            box, "max_results", "Maximum results", "Cap the number of rows shown for a search.",
-            SETTINGS.get("max_results", 250), 25, 2000, 25,
+            box,
+            "max_results",
+            "Maximum results",
+            "Cap the number of rows shown for a search.",
+            SETTINGS.get("max_results", 250),
+            25,
+            2000,
+            25,
         )
         self._dropdown(
-            box, "sort_mode", "Sort results", "Default ordering for search results.",
-            [(label, value) for label, value in (
-                ("Relevance", "relevance"), ("Name", "name"),
-                ("Source", "source"), ("Installed first", "installed"),
-            )],
+            box,
+            "sort_mode",
+            "Sort results",
+            "Default ordering for search results.",
+            [
+                (label, value)
+                for label, value in (
+                    ("Relevance", "relevance"),
+                    ("Name", "name"),
+                    ("Source", "source"),
+                    ("Installed first", "installed"),
+                )
+            ],
             SETTINGS.get("sort_mode", "relevance"),
         )
         self._switch(
-            box, "show_descriptions", "Show descriptions", "Display package summaries under each row.",
+            box,
+            "show_descriptions",
+            "Show descriptions",
+            "Display package summaries under each row.",
             SETTINGS.get("show_descriptions", True),
         )
 
@@ -387,7 +470,9 @@ class SettingsDialog(Gtk.Window):
         box = self._page(*self.CATEGORIES[1])
         self._section(box, "THEME SOURCE")
         self.theme_mode_combo = self._dropdown(
-            box, "theme_mode", "Theme mode",
+            box,
+            "theme_mode",
+            "Theme mode",
             "Automatic follows Heilios/matugen colours when available; no desktop dependency is required.",
             [
                 ("Follow matugen/Heilios scheme (automatic)", "auto"),
@@ -397,46 +482,70 @@ class SettingsDialog(Gtk.Window):
             SETTINGS.get("theme_mode", "auto"),
         )
         self._file(
-            box, "scheme_path", "Scheme JSON path",
+            box,
+            "scheme_path",
+            "Scheme JSON path",
             "Heilios/caelestia scheme file used by the automatic mode.",
             SETTINGS.get("scheme_path", ""),
         )
         self._dropdown(
-            box, "theme_accent", "Accent preset",
+            box,
+            "theme_accent",
+            "Accent preset",
             "Used by 'Fixed accent' and by older configurations.",
             [
-                ("Automatic / scheme", "auto"), ("Pac-Man Gold", "gold"),
-                ("Cyberpunk Cyan", "cyan"), ("Neon Purple", "purple"),
-                ("Emerald Green", "green"), ("Sunset Coral", "coral"),
+                ("Automatic / scheme", "auto"),
+                ("Pac-Man Gold", "gold"),
+                ("Cyberpunk Cyan", "cyan"),
+                ("Neon Purple", "purple"),
+                ("Emerald Green", "green"),
+                ("Sunset Coral", "coral"),
             ],
             SETTINGS.get("theme_accent", "auto"),
         )
 
         self._section(box, "MATUGEN / WALLPAPER")
         self._file(
-            box, "wallpaper_path", "Wallpaper image",
+            box,
+            "wallpaper_path",
+            "Wallpaper image",
             "Generate a Material You palette from this image.",
             SETTINGS.get("wallpaper_path", ""),
         )
         self._dropdown(
-            box, "matugen_scheme_type", "Matugen scheme type", "Colour scheme variant passed to matugen.",
-            [(label, value) for label, value in (
-                ("tonal-spot", "tonal-spot"), ("schema", "schema"),
-                ("expressive", "expressive"), ("fruitsalt", "fruitsalt"),
-                ("content", "content"), ("rainbow", "rainbow"),
-            )],
+            box,
+            "matugen_scheme_type",
+            "Matugen scheme type",
+            "Colour scheme variant passed to matugen.",
+            [
+                (label, value)
+                for label, value in (
+                    ("tonal-spot", "tonal-spot"),
+                    ("schema", "schema"),
+                    ("expressive", "expressive"),
+                    ("fruitsalt", "fruitsalt"),
+                    ("content", "content"),
+                    ("rainbow", "rainbow"),
+                )
+            ],
             SETTINGS.get("matugen_scheme_type", "tonal-spot"),
         )
         self._entry(
-            box, "matugen_binary", "Matugen binary", "Auto-detected when left as 'matugen'.",
+            box,
+            "matugen_binary",
+            "Matugen binary",
+            "Auto-detected when left as 'matugen'.",
             SETTINGS.get("matugen_binary", "matugen"),
         )
         self.matugen_status = Gtk.Label(label="", xalign=0)
         self.matugen_status.add_css_class("muted")
         self.matugen_status.set_wrap(True)
         self._action(
-            box, "Generate & apply now", "Runs matugen once and switches to its palette.",
-            "Generate theme", self._on_matugen,
+            box,
+            "Generate & apply now",
+            "Runs matugen once and switches to its palette.",
+            "Generate theme",
+            self._on_matugen,
         )
         box.append(self.matugen_status)
 
@@ -445,20 +554,39 @@ class SettingsDialog(Gtk.Window):
         if density == "normal" and SETTINGS.get("compact_rows", False):
             density = "compact"  # Backwards compatibility with the old switch.
         self._dropdown(
-            box, "row_density", "Row density", "Overrides the compact-row switch when not 'normal'.",
-            [("Compact", "compact"), ("Normal", "normal"), ("Comfortable", "comfortable")],
+            box,
+            "row_density",
+            "Row density",
+            "Overrides the compact-row switch when not 'normal'.",
+            [
+                ("Compact", "compact"),
+                ("Normal", "normal"),
+                ("Comfortable", "comfortable"),
+            ],
             density,
         )
         self._switch(
-            box, "compact_rows", "Compact list rows", "Legacy compact switch.",
+            box,
+            "compact_rows",
+            "Compact list rows",
+            "Legacy compact switch.",
             SETTINGS.get("compact_rows", False),
         )
         self._spin(
-            box, "font_scale", "Font scale", "Scale interface text (1.0 is default).",
-            SETTINGS.get("font_scale", 1.0), 0.8, 1.6, 0.05,
+            box,
+            "font_scale",
+            "Font scale",
+            "Scale interface text (1.0 is default).",
+            SETTINGS.get("font_scale", 1.0),
+            0.8,
+            1.6,
+            0.05,
         )
         self._switch(
-            box, "pacman_animation", "Pac-Man animation", "Animate the progress mascot during operations.",
+            box,
+            "pacman_animation",
+            "Pac-Man animation",
+            "Animate the progress mascot during operations.",
             SETTINGS.get("pacman_animation", True),
         )
 
@@ -466,26 +594,53 @@ class SettingsDialog(Gtk.Window):
         box = self._page(*self.CATEGORIES[2])
         self._section(box, "DEFAULTS")
         self._dropdown(
-            box, "aur_helper", "Preferred AUR helper", "Auto-detect uses yay first, then paru.",
-            [("Auto-detect", "auto"), ("yay", "yay"), ("paru", "paru"), ("Disabled", "disabled")],
+            box,
+            "aur_helper",
+            "Preferred AUR helper",
+            "Auto-detect uses yay first, then paru.",
+            [
+                ("Auto-detect", "auto"),
+                ("yay", "yay"),
+                ("paru", "paru"),
+                ("Disabled", "disabled"),
+            ],
             SETTINGS.get("aur_helper", "auto"),
         )
         self._dropdown(
-            box, "pip_scope", "Default pip scope", "Where Python packages are installed by default.",
-            [("Managed venv", "venv"), ("User directory", "user"), ("System", "system")],
+            box,
+            "pip_scope",
+            "Default pip scope",
+            "Where Python packages are installed by default.",
+            [
+                ("Managed venv", "venv"),
+                ("User directory", "user"),
+                ("System", "system"),
+            ],
             SETTINGS.get("pip_scope", "venv"),
         )
         self._entry(
-            box, "preferred_terminal", "Preferred terminal", "Used by the 'Open in terminal' action.",
-            SETTINGS.get("preferred_terminal", "auto"), "auto, foot, kitty, alacritty…",
+            box,
+            "preferred_terminal",
+            "Preferred terminal",
+            "Used by the 'Open in terminal' action.",
+            SETTINGS.get("preferred_terminal", "auto"),
+            "auto, foot, kitty, alacritty…",
         )
         self._checks(
-            box, "enabled_managers", "ENABLED MANAGERS",
+            box,
+            "enabled_managers",
+            "ENABLED MANAGERS",
             "Disable a backend to keep it out of searches and update-all.",
             [
-                ("pacman", "pacman"), ("AUR", "aur"), ("Flatpak", "flatpak"),
-                ("APT", "apt"), ("Snap", "snap"), ("Cargo", "cargo"),
-                ("npm", "npm"), ("pip", "pip"), ("Git", "git"),
+                ("pacman", "pacman"),
+                ("AUR", "aur"),
+                ("Flatpak", "flatpak"),
+                ("APT", "apt"),
+                ("Snap", "snap"),
+                ("Cargo", "cargo"),
+                ("npm", "npm"),
+                ("pip", "pip"),
+                ("Git", "git"),
                 ("AppImages", "appimage"),
             ],
             dict(SETTINGS.get("enabled_managers", {})),
@@ -495,28 +650,48 @@ class SettingsDialog(Gtk.Window):
         box = self._page(*self.CATEGORIES[3])
         self._section(box, "UPDATE CHECKS")
         self._switch(
-            box, "check_updates_on_launch", "Check on launch", "Count available updates when pacmangr starts.",
+            box,
+            "check_updates_on_launch",
+            "Check on launch",
+            "Count available updates when pacmangr starts.",
             SETTINGS.get("check_updates_on_launch", True),
         )
         self._switch(
-            box, "auto_update_app", "Auto-update Pacmangr",
+            box,
+            "auto_update_app",
+            "Auto-update Pacmangr",
             "Check GitHub on launch and every six hours; install new commits for this user-local copy.",
             SETTINGS.get("auto_update_app", True),
         )
         self._action(
-            box, "Pacmangr app updates", "Check GitHub and install the latest app files now.",
-            "Check now", lambda *_: self.app.check_app_updates(manual=True),
+            box,
+            "Pacmangr app updates",
+            "Check GitHub and install the latest app files now.",
+            "Check now",
+            lambda *_: self.app.check_app_updates(manual=True),
         )
         self._spin(
-            box, "auto_refresh_interval", "Auto-refresh interval", "Minutes between background checks (0 disables).",
-            SETTINGS.get("auto_refresh_interval", 0), 0, 240, 5,
+            box,
+            "auto_refresh_interval",
+            "Auto-refresh interval",
+            "Minutes between background checks (0 disables).",
+            SETTINGS.get("auto_refresh_interval", 0),
+            0,
+            240,
+            5,
         )
         self._switch(
-            box, "include_aur_updates", "Include AUR helpers", "Let update-all delegate to yay/paru when present.",
+            box,
+            "include_aur_updates",
+            "Include AUR helpers",
+            "Let update-all delegate to yay/paru when present.",
             SETTINGS.get("include_aur_updates", True),
         )
         self._switch(
-            box, "include_flatpak_updates", "Include Flatpak", "Refresh Flatpak applications during update-all.",
+            box,
+            "include_flatpak_updates",
+            "Include Flatpak",
+            "Refresh Flatpak applications during update-all.",
             SETTINGS.get("include_flatpak_updates", True),
         )
         # The confirmation switch lives in Safety & Confirmations; see below.
@@ -525,31 +700,52 @@ class SettingsDialog(Gtk.Window):
         box = self._page(*self.CATEGORIES[4])
         self._section(box, "CONFIRMATIONS")
         self._switch(
-            box, "confirm_actions", "Confirm package actions", "Master switch for install/remove dialogs.",
+            box,
+            "confirm_actions",
+            "Confirm package actions",
+            "Master switch for install/remove dialogs.",
             SETTINGS.get("confirm_actions", True),
         )
         self._switch(
-            box, "confirm_install", "Confirm installs", "Ask before installing a package.",
+            box,
+            "confirm_install",
+            "Confirm installs",
+            "Ask before installing a package.",
             SETTINGS.get("confirm_install", True),
         )
         self._switch(
-            box, "confirm_remove", "Confirm removals", "Ask before removing a package.",
+            box,
+            "confirm_remove",
+            "Confirm removals",
+            "Ask before removing a package.",
             SETTINGS.get("confirm_remove", True),
         )
         self._switch(
-            box, "confirm_update", "Confirm updates", "Ask before updating all sources.",
+            box,
+            "confirm_update",
+            "Confirm updates",
+            "Ask before updating all sources.",
             SETTINGS.get("confirm_update", True),
         )
         self._switch(
-            box, "confirm_orphan_removal", "Confirm orphan removal", "Ask before removing unused packages.",
+            box,
+            "confirm_orphan_removal",
+            "Confirm orphan removal",
+            "Ask before removing unused packages.",
             SETTINGS.get("confirm_orphan_removal", True),
         )
         self._switch(
-            box, "skip_confirm_reinstall", "Skip reinstall confirmation", "Do not ask when reinstalling an installed package.",
+            box,
+            "skip_confirm_reinstall",
+            "Skip reinstall confirmation",
+            "Do not ask when reinstalling an installed package.",
             SETTINGS.get("skip_confirm_reinstall", False),
         )
         self._dropdown(
-            box, "trash_or_delete", "Removal method", "Prefer trash for reversible file removals where supported.",
+            box,
+            "trash_or_delete",
+            "Removal method",
+            "Prefer trash for reversible file removals where supported.",
             [("Move to trash", "trash"), ("Permanent delete", "delete")],
             SETTINGS.get("trash_or_delete", "trash"),
         )
@@ -562,35 +758,59 @@ class SettingsDialog(Gtk.Window):
         label.set_wrap(True)
         box.append(label)
         self._spin(
-            box, "cache_ttl", "Cache TTL", "Seconds before cached search data is considered stale.",
-            SETTINGS.get("cache_ttl", 3600), 0, 86400, 300,
+            box,
+            "cache_ttl",
+            "Cache TTL",
+            "Seconds before cached search data is considered stale.",
+            SETTINGS.get("cache_ttl", 3600),
+            0,
+            86400,
+            300,
         )
         self._action(
-            box, "Clear local cache", "Removes cached metadata only; installed packages are untouched.",
-            "Clear cache", lambda *_: self.app.confirm_clear_cache(),
+            box,
+            "Clear local cache",
+            "Removes cached metadata only; installed packages are untouched.",
+            "Clear cache",
+            lambda *_: self.app.confirm_clear_cache(),
         )
 
         self._section(box, "DIAGNOSTICS")
         self._dropdown(
-            box, "log_level", "Log level", "Verbosity used by background operations.",
+            box,
+            "log_level",
+            "Log level",
+            "Verbosity used by background operations.",
             [("Quiet", "quiet"), ("Info", "info"), ("Debug", "debug")],
             SETTINGS.get("log_level", "info"),
         )
         self._switch(
-            box, "debug_mode", "Debug mode", "Show raw commands and extra status information.",
+            box,
+            "debug_mode",
+            "Debug mode",
+            "Show raw commands and extra status information.",
             SETTINGS.get("debug_mode", False),
         )
         self._action(
-            box, "Export installed list", "Write a timestamped package list to your home directory.",
-            "Export", lambda *_: self.app.export_package_list(),
+            box,
+            "Export installed list",
+            "Write a timestamped package list to your home directory.",
+            "Export",
+            lambda *_: self.app.export_package_list(),
         )
         self._action(
-            box, "Package manager status", "Show detected manager paths and manager notes.",
-            "Show status", lambda *_: self.app.show_manager_status(),
+            box,
+            "Package manager status",
+            "Show detected manager paths and manager notes.",
+            "Show status",
+            lambda *_: self.app.show_manager_status(),
         )
         self._action(
-            box, "Open configuration folder", "Open the folder containing gui_settings.json.",
-            "Open folder", self._open_config_folder,
+            box,
+            "Open configuration folder",
+            "Open the folder containing gui_settings.json.",
+            "Open folder",
+            self._open_config_folder,
         )
 
     def _build_about(self) -> None:
@@ -619,8 +839,11 @@ class SettingsDialog(Gtk.Window):
             link.set_halign(Gtk.Align.START)
             box.append(link)
         self._action(
-            box, "About dialog", "Open the standalone about window.",
-            "Open about", self._show_about,
+            box,
+            "About dialog",
+            "Open the standalone about window.",
+            "Open about",
+            self._show_about,
         )
 
     def _show_about(self, *_button) -> None:
@@ -629,7 +852,9 @@ class SettingsDialog(Gtk.Window):
         dialog.set_modal(True)
         dialog.set_program_name("pacmangr-gui")
         dialog.set_version(CORE.VERSION)
-        dialog.set_comments("Graphical front-end for the pacmangr package manager toolkit.")
+        dialog.set_comments(
+            "Graphical front-end for the pacmangr package manager toolkit."
+        )
         dialog.set_website("https://github.com/hei/pacmangr")
         dialog.present()
 
@@ -649,7 +874,9 @@ class SettingsDialog(Gtk.Window):
             elif kind == "spin":
                 values[key] = widget.get_value()
             elif kind == "checks":
-                values[key] = {name: bool(check.get_active()) for name, check in widget.items()}
+                values[key] = {
+                    name: bool(check.get_active()) for name, check in widget.items()
+                }
         for key, caster in self.casters.items():
             if key in values:
                 try:
