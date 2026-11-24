@@ -1,5 +1,7 @@
 """Command preparation, streaming runners and package-operation helpers."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import fcntl
@@ -28,11 +30,11 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
-from .core_loader import CORE  # noqa: E402
-from .settings import SETTINGS  # noqa: E402
-from .theme import hex_rgb, pacman_frame  # noqa: E402
+from .core_loader import CORE
+from .settings import SETTINGS
+from .theme import hex_rgb, pacman_frame
 
 # Set by prepare_single_auth_update() when sudo's cached timestamp is missing.
 SINGLE_AUTH_NEEDS_PASSWORD = False
@@ -63,7 +65,7 @@ def prepare_gui_operation(
     if executable in {"yay", "paru"}:
         if not pkexec:
             raise RuntimeError("AUR installation needs polkit (pkexec).")
-        argv[executable_index + 1:executable_index + 1] = ["--sudo", pkexec]
+        argv[executable_index + 1 : executable_index + 1] = ["--sudo", pkexec]
 
     flags: list[str] = []
     if executable in {"pacman", "yay", "paru"}:
@@ -81,7 +83,7 @@ def prepare_gui_operation(
 
     if flags:
         operation_index = argv.index(operation, executable_index + 1)
-        argv[operation_index + 1:operation_index + 1] = [
+        argv[operation_index + 1 : operation_index + 1] = [
             flag for flag in flags if flag not in argv
         ]
     return argv
@@ -284,7 +286,11 @@ def operation_environment() -> dict[str, str]:
 # Single-authentication update flow
 # ---------------------------------------------------------------------------
 def _privilege_paths(tools) -> set[str]:
-    return {path for path in (getattr(tools, "sudo", None), getattr(tools, "doas", None)) if path}
+    return {
+        path
+        for path in (getattr(tools, "sudo", None), getattr(tools, "doas", None))
+        if path
+    }
 
 
 def _strip_privilege(command: list[str], tools) -> list[str]:
@@ -328,19 +334,24 @@ def _prepare_root_command(command: list[str], tools) -> list[str] | None:
 
 def _sudo_timestamp_valid(sudo: str) -> bool:
     try:
-        return subprocess.run(
-            [sudo, "-n", "-v"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                [sudo, "-n", "-v"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def prepare_single_auth_update(commands: list[tuple[str, list[str]]], tools) -> list[str] | None:
+def prepare_single_auth_update(
+    commands: list[tuple[str, list[str]]], tools
+) -> list[str] | None:
     """Build ONE privileged invocation that runs every update command.
 
     ``pkexec`` is preferred because it provides a graphical prompt.  With sudo
@@ -352,7 +363,13 @@ def prepare_single_auth_update(commands: list[tuple[str, list[str]]], tools) -> 
     if not commands:
         return None
 
-    prepared = [argv for argv in (_prepare_root_command(command, tools) for _label, command in commands) if argv]
+    prepared = [
+        argv
+        for argv in (
+            _prepare_root_command(command, tools) for _label, command in commands
+        )
+        if argv
+    ]
     if not prepared:
         return None
     script = " && ".join(shlex.join(argv) for argv in prepared)
@@ -361,7 +378,11 @@ def prepare_single_auth_update(commands: list[tuple[str, list[str]]], tools) -> 
     if pkexec:
         return [pkexec, "sh", "-c", script]
 
-    sudo = shutil.which("sudo") or getattr(tools, "sudo", None) or getattr(tools, "doas", None)
+    sudo = (
+        shutil.which("sudo")
+        or getattr(tools, "sudo", None)
+        or getattr(tools, "doas", None)
+    )
     if sudo:
         SINGLE_AUTH_NEEDS_PASSWORD = not _sudo_timestamp_valid(sudo)
         return [sudo, "-n", "sh", "-c", script]
@@ -378,8 +399,11 @@ def prime_sudo_timestamp(parent=None, sudo: str | None = None) -> bool:
 
     from gi.repository import GLib as _GLib
 
-    dialog = Gtk.Window(title="Authenticate once", modal=True,
-                        transient_for=parent if isinstance(parent, Gtk.Window) else None)
+    dialog = Gtk.Window(
+        title="Authenticate once",
+        modal=True,
+        transient_for=parent if isinstance(parent, Gtk.Window) else None,
+    )
     dialog.set_default_size(360, 160)
     loop = _GLib.MainLoop()
     result: dict[str, str] = {}
@@ -389,7 +413,9 @@ def prime_sudo_timestamp(parent=None, sudo: str | None = None) -> bool:
     box.set_margin_bottom(18)
     box.set_margin_start(18)
     box.set_margin_end(18)
-    label = Gtk.Label(label="Password for sudo (one prompt updates everything):", xalign=0)
+    label = Gtk.Label(
+        label="Password for sudo (one prompt updates everything):", xalign=0
+    )
     label.set_wrap(True)
     entry = Gtk.PasswordEntry()
     buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -449,13 +475,17 @@ def run_single_auth_update(
     argv = prepare_single_auth_update(commands, tools)
     if not argv:
         return 126, "No graphical authentication (pkexec) or sudo is available."
-    return run_streamed_operation(argv, operation_environment(), on_line, timeout=timeout)
+    return run_streamed_operation(
+        argv, operation_environment(), on_line, timeout=timeout
+    )
 
 
 # ---------------------------------------------------------------------------
 # Orphans and update counts
 # ---------------------------------------------------------------------------
-def collect_installed_metadata(pacman: str | None = None) -> tuple[set[str], set[str], set[str]]:
+def collect_installed_metadata(
+    pacman: str | None = None,
+) -> tuple[set[str], set[str], set[str]]:
     """Return (explicit, dependencies, orphans) name sets from pacman."""
     explicit: set[str] = set()
     deps: set[str] = set()
@@ -485,7 +515,9 @@ def collect_installed_metadata(pacman: str | None = None) -> tuple[set[str], set
 def orphan_remove_command(orphans, tools) -> list[str]:
     """One pacman command, so orphan cleanup needs only one authentication."""
     names = sorted(set(orphans))
-    pacman = getattr(tools, "pacman", None) or shutil.which("pacman") or "/usr/bin/pacman"
+    pacman = (
+        getattr(tools, "pacman", None) or shutil.which("pacman") or "/usr/bin/pacman"
+    )
     privilege = getattr(tools, "sudo", None) or "/usr/bin/sudo"
     return [privilege, pacman, "-Rns", *names]
 
@@ -513,6 +545,7 @@ def available_update_lines(timeout: float = 25) -> list[str]:
 # GitHub repository details (README.md instead of native package commands)
 # ----------------------------------------------------------------------
 
+
 def github_repo_slug(source) -> str:
     """Return ``owner/repo`` for a GitHub item, URL, or bare ``owner/repo``."""
     if isinstance(source, str):
@@ -537,7 +570,11 @@ def github_repo_slug(source) -> str:
         parsed = urllib.parse.urlparse(text)
         if parsed.scheme and parsed.netloc:
             host = parsed.netloc.lower().split("@")[-1].split(":")[0]
-            if host not in {"github.com", "www.github.com", "raw.githubusercontent.com"}:
+            if host not in {
+                "github.com",
+                "www.github.com",
+                "raw.githubusercontent.com",
+            }:
                 continue
             parts = [part for part in parsed.path.split("/") if part][:2]
             if len(parts) < 2:
@@ -600,14 +637,23 @@ def _format_readme_markdown(text: str) -> str:
 
         line = re.sub(r"<((?:https?://)[^>]+)>", r"\1", line)
         line = re.sub(r"<br\s*/?>", " ", line, flags=re.IGNORECASE)
-        line = re.sub(r"</(?:p|div|summary|li|tr|h[1-6])\s*>", " ", line, flags=re.IGNORECASE)
+        line = re.sub(
+            r"</(?:p|div|summary|li|tr|h[1-6])\s*>", " ", line, flags=re.IGNORECASE
+        )
 
         def image_label(match: re.Match) -> str:
-            alt = re.search(r"\balt\s*=\s*(['\"])(.*?)\1", match.group(0), re.IGNORECASE)
+            alt = re.search(
+                r"\balt\s*=\s*(['\"])(.*?)\1", match.group(0), re.IGNORECASE
+            )
             return f"[image: {alt.group(2)}]" if alt and alt.group(2).strip() else ""
 
         line = re.sub(r"<img\b[^>]*>", image_label, line, flags=re.IGNORECASE)
-        line = re.sub(r"</?(?:details|summary|p|div|span|sub|sup|kbd|strong|em|table|thead|tbody|tr|th|td)\b[^>]*>", "", line, flags=re.IGNORECASE)
+        line = re.sub(
+            r"</?(?:details|summary|p|div|span|sub|sup|kbd|strong|em|table|thead|tbody|tr|th|td)\b[^>]*>",
+            "",
+            line,
+            flags=re.IGNORECASE,
+        )
         line = re.sub(r"<[^>]+>", "", line)
         line = html.unescape(line)
 
@@ -619,11 +665,18 @@ def _format_readme_markdown(text: str) -> str:
 
         table_cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(table_cells) > 1:
-            if all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in table_cells):
+            if all(
+                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
+                for cell in table_cells
+            ):
                 continue
             line = "  │  ".join(table_cells)
 
-        cleaned = re.sub(r"!\[([^]]*)\]\([^)]*\)", lambda m: f"[image: {m.group(1)}]" if m.group(1) else "", line)
+        cleaned = re.sub(
+            r"!\[([^]]*)\]\([^)]*\)",
+            lambda m: f"[image: {m.group(1)}]" if m.group(1) else "",
+            line,
+        )
         cleaned = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", cleaned)
         cleaned = re.sub(r"(\*\*|__)(.+?)\1", r"\2", cleaned)
         cleaned = re.sub(r"[`*_~]", "", cleaned)
@@ -632,7 +685,11 @@ def _format_readme_markdown(text: str) -> str:
             continue
         bullet = re.match(r"^(\s*)[-*+]\s+(.*)$", cleaned)
         if bullet:
-            content = re.sub(r"^\[([ xX])\]\s+", lambda match: "☑  " if match.group(1).strip() else "☐  ", bullet.group(2))
+            content = re.sub(
+                r"^\[([ xX])\]\s+",
+                lambda match: "☑  " if match.group(1).strip() else "☐  ",
+                bullet.group(2),
+            )
             cleaned = f"{bullet.group(1)}•  {content}"
         ordered = re.match(r"^(\s*)(\d+[.)])\s+(.*)$", cleaned)
         if ordered:
@@ -667,7 +724,10 @@ def fetch_github_readme(item, timeout: float = 15) -> tuple[str, str]:
             return _format_readme_markdown(raw), ""
         except urllib.error.HTTPError as exc:
             if exc.code in {403, 429}:
-                return "", f"Could not load README.md: GitHub rate limit reached (HTTP {exc.code})"
+                return (
+                    "",
+                    f"Could not load README.md: GitHub rate limit reached (HTTP {exc.code})",
+                )
             last_error = f"HTTP {exc.code}"
         except urllib.error.URLError as exc:
             last_error = f"network error: {getattr(exc, 'reason', exc)}"
@@ -687,7 +747,10 @@ def fetch_github_readme(item, timeout: float = 15) -> tuple[str, str]:
         return _format_readme_markdown(raw), ""
     except urllib.error.HTTPError as exc:
         if exc.code in {403, 429}:
-            return "", f"Could not load README.md: GitHub rate limit reached (HTTP {exc.code})"
+            return (
+                "",
+                f"Could not load README.md: GitHub rate limit reached (HTTP {exc.code})",
+            )
         last_error = f"HTTP {exc.code}"
     except urllib.error.URLError as exc:
         last_error = f"network error: {getattr(exc, 'reason', exc)}"
@@ -707,7 +770,9 @@ def fetch_github_files(item, timeout: float = 15, limit: int = 2000) -> tuple[st
     branch = str(getattr(item, "github_default_branch", "") or "").strip()
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "Pacmangr-GUI"}
     if not branch:
-        request = urllib.request.Request(f"https://api.github.com/repos/{slug}", headers=headers)
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{slug}", headers=headers
+        )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8", "replace"))
@@ -729,7 +794,10 @@ def fetch_github_files(item, timeout: float = 15, limit: int = 2000) -> tuple[st
         if exc.code in {403, 429}:
             return "", "GitHub's API rate limit was reached. Try again later."
         if exc.code == 404:
-            return "", "Could not list files: the repository or its default branch is unavailable."
+            return (
+                "",
+                "Could not list files: the repository or its default branch is unavailable.",
+            )
         return "", f"Could not list files: GitHub returned HTTP {exc.code}."
     except urllib.error.URLError as exc:
         return "", f"Could not reach GitHub: {getattr(exc, 'reason', exc)}"
@@ -785,11 +853,14 @@ class PacmanActivity(Gtk.DrawingArea):
         self.queue_draw()
 
         settings = Gtk.Settings.get_default()
-        animations_enabled = (
-            settings is None
-            or settings.get_property("gtk-enable-animations")
+        animations_enabled = settings is None or settings.get_property(
+            "gtk-enable-animations"
         )
-        if animations_enabled and not self._source_id and SETTINGS.get("pacman_animation", True):
+        if (
+            animations_enabled
+            and not self._source_id
+            and SETTINGS.get("pacman_animation", True)
+        ):
             self._source_id = GLib.timeout_add(50, self._tick)
 
     def stop(self) -> None:
