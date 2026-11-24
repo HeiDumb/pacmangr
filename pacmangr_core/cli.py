@@ -17,7 +17,8 @@ from .backends import collect_installed_packages, git_package, is_git_url
 from .cache import PackageCache
 from .commands import noninteractive_command, system_update_commands
 from .models import PackageItem, Tools
-from .tui import PkgUI, headless_ui, main as tui_main
+from .tui import headless_ui
+from .tui import main as tui_main
 from .utils import run_capture
 from .versions import format_versions, package_versions
 
@@ -25,8 +26,16 @@ from .versions import format_versions, package_versions
 def print_packages(items: list[PackageItem]) -> None:
     for item in items:
         state = "installed" if item.installed else "available"
-        fields = (item.source, item.package_id, item.version or "-", state, item.description)
-        print("\t".join(field.replace("\t", " ").replace("\n", " ") for field in fields))
+        fields = (
+            item.source,
+            item.package_id,
+            item.version or "-",
+            state,
+            item.description,
+        )
+        print(
+            "\t".join(field.replace("\t", " ").replace("\n", " ") for field in fields)
+        )
 
 
 def print_cache_status(cache: PackageCache) -> None:
@@ -56,7 +65,9 @@ def clear_cache(cache: PackageCache) -> None:
     print("cache cleared" if removed else "cache already empty")
 
 
-def parse_cli_operation(argv: list[str], *, needs_package: bool = True) -> tuple[str, str, str, bool, bool]:
+def parse_cli_operation(
+    argv: list[str], *, needs_package: bool = True
+) -> tuple[str, str, str, bool, bool]:
     """Parse the deliberately small, stable CLI operation option set."""
     source = "all"
     scope = "user"
@@ -100,7 +111,9 @@ def parse_cli_operation(argv: list[str], *, needs_package: bool = True) -> tuple
     return (positional[0] if positional else "", source, scope, assume_yes, dry_run)
 
 
-def resolve_cli_package(package: str, source: str, action: str, tools: Tools) -> PackageItem | None:
+def resolve_cli_package(
+    package: str, source: str, action: str, tools: Tools
+) -> PackageItem | None:
     if source in {"all", "git"} and action == "install" and is_git_url(package):
         return git_package(package)
     if action == "remove":
@@ -115,12 +128,20 @@ def resolve_cli_package(package: str, source: str, action: str, tools: Tools) ->
     if source != "all":
         aliases = {"aur": {"aur", "aur/local", "yay", "paru"}, "pacman": {"pacman"}}
         accepted = aliases.get(source, {source})
-        items = [item for item in items if item.source in accepted or item.manager in accepted]
-    exact = [item for item in items if item.package_id == package or item.name == package]
+        items = [
+            item
+            for item in items
+            if item.source in accepted or item.manager in accepted
+        ]
+    exact = [
+        item for item in items if item.package_id == package or item.name == package
+    ]
     return (exact or items or [None])[0]
 
 
-def run_cli_command(label: str, command: list[str], *, assume_yes: bool, dry_run: bool) -> int:
+def run_cli_command(
+    label: str, command: list[str], *, assume_yes: bool, dry_run: bool
+) -> int:
     argv = noninteractive_command(command) if assume_yes else command
     print(f"[{label}] {shlex.join(argv)}")
     if dry_run:
@@ -140,14 +161,23 @@ def run_git_fetch(url: str, target_value: str) -> int:
     item = git_package(url)
     target = Path(target_value).expanduser().resolve()
     root = constants.GIT_SOURCE_ROOT.resolve()
-    if item is None or target.parent != root or target != Path(item.package_id).resolve():
-        print("refusing Git checkout outside Pacmangr's managed source directory", file=sys.stderr)
+    if (
+        item is None
+        or target.parent != root
+        or target != Path(item.package_id).resolve()
+    ):
+        print(
+            "refusing Git checkout outside Pacmangr's managed source directory",
+            file=sys.stderr,
+        )
         return 2
     root.mkdir(parents=True, exist_ok=True)
     if target.exists():
         print(f"checkout already exists: {target}", file=sys.stderr)
         return 1
-    return subprocess.run([git, "clone", "--filter=blob:none", url, str(target)], check=False).returncode
+    return subprocess.run(
+        [git, "clone", "--filter=blob:none", url, str(target)], check=False
+    ).returncode
 
 
 def run_pip_install(scope: str, package: str) -> int:
@@ -156,11 +186,16 @@ def run_pip_install(scope: str, package: str) -> int:
         target = constants.PIP_VENV_ROOT / safe_name
         target.parent.mkdir(parents=True, exist_ok=True)
         if not (target / "bin/python").is_file():
-            code = subprocess.run([sys.executable, "-m", "venv", str(target)], check=False).returncode
+            code = subprocess.run(
+                [sys.executable, "-m", "venv", str(target)], check=False
+            ).returncode
             if code != 0:
                 return code
         print(f"venv: {target}")
-        code = subprocess.run([str(target / "bin/python"), "-m", "pip", "install", "--upgrade", package], check=False).returncode
+        code = subprocess.run(
+            [str(target / "bin/python"), "-m", "pip", "install", "--upgrade", package],
+            check=False,
+        ).returncode
         if code == 0:
             (target / ".pacmangr-package").write_text(package + "\n", encoding="utf-8")
         return code
@@ -229,9 +264,14 @@ def run_cli(argv: list[str] | None = None) -> None:
             if argv[1] in {"install", "remove"}:
                 action = argv[1]
                 try:
-                    package, source, scope, assume_yes, dry_run = parse_cli_operation(argv[2:])
+                    package, source, scope, assume_yes, dry_run = parse_cli_operation(
+                        argv[2:]
+                    )
                 except ValueError as exc:
-                    print(f"usage: pacmangr {action} <package> [--source NAME] [--scope venv|user|system] [-y] [--dry-run]", file=sys.stderr)
+                    print(
+                        f"usage: pacmangr {action} <package> [--source NAME] [--scope venv|user|system] [-y] [--dry-run]",
+                        file=sys.stderr,
+                    )
                     print(exc, file=sys.stderr)
                     raise SystemExit(2)
                 tools = Tools.detect()
@@ -239,25 +279,48 @@ def run_cli(argv: list[str] | None = None) -> None:
                 if item is None:
                     print(f"{package!r} was not found in {source}", file=sys.stderr)
                     raise SystemExit(1)
-                command = item.install_command(tools, install_scope=scope) if action == "install" else item.remove_command(tools)
+                command = (
+                    item.install_command(tools, install_scope=scope)
+                    if action == "install"
+                    else item.remove_command(tools)
+                )
                 if not command:
-                    print(f"no {action} command is available for {item.title()} ({item.source})", file=sys.stderr)
+                    print(
+                        f"no {action} command is available for {item.title()} ({item.source})",
+                        file=sys.stderr,
+                    )
                     raise SystemExit(1)
-                raise SystemExit(run_cli_command(f"{action} {item.source}", command, assume_yes=assume_yes, dry_run=dry_run))
+                raise SystemExit(
+                    run_cli_command(
+                        f"{action} {item.source}",
+                        command,
+                        assume_yes=assume_yes,
+                        dry_run=dry_run,
+                    )
+                )
             if argv[1] == "update":
                 try:
-                    _package, source, _scope, assume_yes, dry_run = parse_cli_operation(argv[2:], needs_package=False)
+                    _package, source, _scope, assume_yes, dry_run = parse_cli_operation(
+                        argv[2:], needs_package=False
+                    )
                 except ValueError as exc:
-                    print("usage: pacmangr update [source] [-y] [--dry-run]", file=sys.stderr)
+                    print(
+                        "usage: pacmangr update [source] [-y] [--dry-run]",
+                        file=sys.stderr,
+                    )
                     print(exc, file=sys.stderr)
                     raise SystemExit(2)
                 commands = system_update_commands(Tools.detect(), source)
                 if not commands:
-                    print(f"no update command is available for {source}", file=sys.stderr)
+                    print(
+                        f"no update command is available for {source}", file=sys.stderr
+                    )
                     raise SystemExit(1)
                 result = 0
                 for label, command in commands:
-                    code = run_cli_command(label, command, assume_yes=assume_yes, dry_run=dry_run)
+                    code = run_cli_command(
+                        label, command, assume_yes=assume_yes, dry_run=dry_run
+                    )
                     result = result or code
                     if code != 0:
                         break
@@ -269,8 +332,10 @@ def run_cli(argv: list[str] | None = None) -> None:
                 cache.save_installed(items)
                 if needle:
                     items = [
-                        item for item in items
-                        if needle in item.name.lower() or needle in item.package_id.lower()
+                        item
+                        for item in items
+                        if needle in item.name.lower()
+                        or needle in item.package_id.lower()
                     ]
                 print_packages(items)
                 raise SystemExit(0)
@@ -281,13 +346,20 @@ def run_cli(argv: list[str] | None = None) -> None:
                 package = argv[2]
                 tools = Tools.detect()
                 installed = next(
-                    (item for item in PackageCache().load_installed() if item.package_id == package),
+                    (
+                        item
+                        for item in PackageCache().load_installed()
+                        if item.package_id == package
+                    ),
                     None,
                 )
                 item = installed or PackageItem("pacman", "pacman", package, package)
                 command = item.info_command(tools, installed_view=installed is not None)
                 if not command:
-                    print(f"no information command is available for {package}", file=sys.stderr)
+                    print(
+                        f"no information command is available for {package}",
+                        file=sys.stderr,
+                    )
                     raise SystemExit(1)
                 code, output = run_capture(command, timeout=30)
                 print(output.rstrip())
@@ -312,7 +384,10 @@ def run_cli(argv: list[str] | None = None) -> None:
                     print("usage: pacmangr search <query>", file=sys.stderr)
                     raise SystemExit(2)
                 if not sys.stdin.isatty() or not sys.stdout.isatty():
-                    print("pacmangr needs to run in an interactive terminal.", file=sys.stderr)
+                    print(
+                        "pacmangr needs to run in an interactive terminal.",
+                        file=sys.stderr,
+                    )
                     raise SystemExit(2)
                 curses.wrapper(tui_main, " ".join(argv[2:]))
                 raise SystemExit(0)
@@ -330,7 +405,9 @@ def run_cli(argv: list[str] | None = None) -> None:
                 tools = Tools.detect()
                 print(f"managers: {tools.enabled_labels()}")
                 print(f"cache: {constants.CACHE_DB_PATH}")
-                print(f"terminal: {'yes' if sys.stdin.isatty() and sys.stdout.isatty() else 'no'}")
+                print(
+                    f"terminal: {'yes' if sys.stdin.isatty() and sys.stdout.isatty() else 'no'}"
+                )
                 raise SystemExit(0 if tools.enabled_labels() != "none" else 1)
             if argv[1] in {"-h", "--help"}:
                 print(usage())
@@ -343,4 +420,6 @@ def run_cli(argv: list[str] | None = None) -> None:
             raise SystemExit(2)
         curses.wrapper(tui_main)
     except KeyboardInterrupt:
-        print("\n \033[31m You quit via Ctrl+C, That is a bad idea, use esc to quit next time \033[0m")
+        print(
+            "\n \033[31m You quit via Ctrl+C, That is a bad idea, use esc to quit next time \033[0m"
+        )
