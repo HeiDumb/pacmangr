@@ -1,5 +1,7 @@
 """Application orchestrator: header, sidebar, views, details and operations."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -15,13 +17,13 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk
 
-from .core_loader import APP_ID, CORE, load_core, source_choices  # noqa: E402,F401
-from .details import DetailsPane  # noqa: E402
-from .operations import (  # noqa: E402
-    available_update_lines,
+from .core_loader import APP_ID, CORE, MAX_GUI_RESULTS, source_choices
+from .details import DetailsPane
+from .operations import (
     PacmanActivity,
+    available_update_lines,
     ensure_graphical_auth_agent,
     format_eta,
     orphan_remove_command,
@@ -29,10 +31,10 @@ from .operations import (  # noqa: E402
     prepare_gui_operation,
     run_streamed_operation,
 )
-from .settings import SETTINGS, SettingsDialog  # noqa: E402
-from .self_update import UpdateResult, check_and_apply_update  # noqa: E402
-from .sidebar import Sidebar  # noqa: E402
-from .theme import (  # noqa: E402
+from .self_update import UpdateResult, check_and_apply_update
+from .settings import SETTINGS, SettingsDialog
+from .sidebar import Sidebar
+from .theme import (
     HEILIOS_SCHEME_PATH,
     MATUGEN_SCHEME_PATH,
     PREVIEW_SCHEME_PATH,
@@ -42,8 +44,8 @@ from .theme import (  # noqa: E402
     install_css,
     palette,
 )
-from .views import BrowseView, GitHubView, InstalledView, OrphansView, UpdatesView  # noqa: E402
-from .widgets import (  # noqa: E402
+from .views import BrowseView, GitHubView, InstalledView, OrphansView, UpdatesView
+from .widgets import (
     ask_confirmation,
     cache_summary,
     clear_cache_files,
@@ -74,7 +76,9 @@ class PacmangrGUI(Gtk.Application):
     VIEW_KEYS = ("browse", "installed", "updates", "github", "orphans")
 
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        super().__init__(
+            application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS
+        )
         self.window: Gtk.ApplicationWindow | None = None
         self.tools = CORE.Tools.detect()
         self.cache = CORE.PackageCache()
@@ -203,9 +207,13 @@ class PacmangrGUI(Gtk.Application):
         title_widget.append(divider)
 
         copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        self.header_title = Gtk.Label(label=VIEW_LABELS.get(self.view_mode, "Browse & Install"), xalign=0)
+        self.header_title = Gtk.Label(
+            label=VIEW_LABELS.get(self.view_mode, "Browse & Install"), xalign=0
+        )
         self.header_title.add_css_class("header-view-title")
-        self.header_subtitle = Gtk.Label(label=VIEW_META.get(self.view_mode, ""), xalign=0)
+        self.header_subtitle = Gtk.Label(
+            label=VIEW_META.get(self.view_mode, ""), xalign=0
+        )
         self.header_subtitle.add_css_class("header-view-subtitle")
         copy.append(self.header_title)
         copy.append(self.header_subtitle)
@@ -238,11 +246,15 @@ class PacmangrGUI(Gtk.Application):
         main_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         main_row.set_vexpand(True)
 
-        self.sidebar = Sidebar(active=self.view_mode, on_activate=self._sidebar_activated)
+        self.sidebar = Sidebar(
+            active=self.view_mode, on_activate=self._sidebar_activated
+        )
         self.sidebar.set_vexpand(True)
         self.sidebar_revealer = Gtk.Revealer()
         self.sidebar_revealer.set_vexpand(True)
-        self.sidebar_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_RIGHT)
+        self.sidebar_revealer.set_transition_type(
+            Gtk.RevealerTransitionType.SLIDE_RIGHT
+        )
         self.sidebar_revealer.set_transition_duration(180)
         self.sidebar_revealer.set_reveal_child(not self.sidebar_collapsed)
         self.sidebar_revealer.set_child(self.sidebar)
@@ -253,7 +265,9 @@ class PacmangrGUI(Gtk.Application):
         self.sidebar_strip.set_size_request(10, -1)
         self.sidebar_strip.set_vexpand(True)
         self.sidebar_strip.set_tooltip_text("Show navigation (Ctrl+B)")
-        self.sidebar_strip.connect("clicked", lambda *_: self.set_sidebar_collapsed(False))
+        self.sidebar_strip.connect(
+            "clicked", lambda *_: self.set_sidebar_collapsed(False)
+        )
         strip_motion = Gtk.EventControllerMotion()
         strip_motion.connect("enter", lambda *_: self.set_sidebar_collapsed(False))
         self.sidebar_strip.add_controller(strip_motion)
@@ -320,7 +334,9 @@ class PacmangrGUI(Gtk.Application):
         self.cancel_operation_button.add_css_class("danger")
         self.cancel_operation_button.set_margin_end(10)
         self.cancel_operation_button.set_visible(False)
-        self.cancel_operation_button.connect("clicked", lambda *_: self.cancel_operation())
+        self.cancel_operation_button.connect(
+            "clicked", lambda *_: self.cancel_operation()
+        )
         status_box.append(self.cancel_operation_button)
         root.append(status_box)
 
@@ -352,8 +368,12 @@ class PacmangrGUI(Gtk.Application):
 
         if key == "browse":
             if self.browse_items:
-                self.show_items(self.browse_items, f"Results for “{self.browse_query}”",
-                                remember=False, auto_select=False)
+                self.show_items(
+                    self.browse_items,
+                    f"Results for “{self.browse_query}”",
+                    remember=False,
+                    auto_select=False,
+                )
             elif not initial:
                 self.clear_rows()
                 self.result_heading_set("Search for packages")
@@ -405,8 +425,11 @@ class PacmangrGUI(Gtk.Application):
 
     def on_key_pressed(self, _controller, keyval, _keycode, state) -> bool:
         if keyval == Gdk.KEY_Escape:
-            if (self.sidebar_revealer and not self.sidebar_collapsed
-                    and isinstance(self.window, Gtk.Window)):
+            if (
+                self.sidebar_revealer
+                and not self.sidebar_collapsed
+                and isinstance(self.window, Gtk.Window)
+            ):
                 self.set_sidebar_collapsed(True)
                 return True
             if self.window:
@@ -469,12 +492,18 @@ class PacmangrGUI(Gtk.Application):
         self.apply_colours()
         if self.header:
             self.header.set_title_widget(self.build_header_title())
-        self.set_sidebar_collapsed(bool(SETTINGS.get("sidebar_collapsed", False)), persist=False)
+        self.set_sidebar_collapsed(
+            bool(SETTINGS.get("sidebar_collapsed", False)), persist=False
+        )
         view = self.views.get(self.view_mode)
         if view:
             if self.view_mode == "browse" and self.browse_items:
-                self.show_items(self.browse_items, f"Results for “{self.browse_query}”",
-                                remember=False, auto_select=False)
+                self.show_items(
+                    self.browse_items,
+                    f"Results for “{self.browse_query}”",
+                    remember=False,
+                    auto_select=False,
+                )
             elif self.view_mode == "installed" and self.installed_loaded:
                 view.filter_installed()
             elif hasattr(view, "refresh") and getattr(view, "loaded", False):
@@ -489,7 +518,12 @@ class PacmangrGUI(Gtk.Application):
         self.sidebar.set_badge("orphans", len(self.orphans_set))
 
     def _scheme_paths(self) -> tuple[Path, ...]:
-        paths = [PREVIEW_SCHEME_PATH, SCHEME_PATH, HEILIOS_SCHEME_PATH, MATUGEN_SCHEME_PATH]
+        paths = [
+            PREVIEW_SCHEME_PATH,
+            SCHEME_PATH,
+            HEILIOS_SCHEME_PATH,
+            MATUGEN_SCHEME_PATH,
+        ]
         configured_value = SETTINGS.get("scheme_path")
         if configured_value:
             configured = Path(configured_value).expanduser()
@@ -520,11 +554,16 @@ class PacmangrGUI(Gtk.Application):
 
     def on_colour_file_changed(self, _monitor, file, other_file, _event) -> None:
         paths = set(self._scheme_paths())
-        if not any(f and f.get_path() and Path(f.get_path()) in paths for f in (file, other_file)):
+        if not any(
+            f and f.get_path() and Path(f.get_path()) in paths
+            for f in (file, other_file)
+        ):
             return
         if self._colour_refresh_source:
             GLib.source_remove(self._colour_refresh_source)
-        self._colour_refresh_source = GLib.timeout_add(30, self.refresh_colours_from_event)
+        self._colour_refresh_source = GLib.timeout_add(
+            30, self.refresh_colours_from_event
+        )
 
     def refresh_colours_from_event(self) -> bool:
         self._colour_refresh_source = 0
@@ -553,7 +592,11 @@ class PacmangrGUI(Gtk.Application):
         return GLib.SOURCE_CONTINUE
 
     def apply_colours(self, *, scheme_colours: dict | None = None) -> None:
-        colours = palette(scheme_colours=scheme_colours) if scheme_colours is not None else palette()
+        colours = (
+            palette(scheme_colours=scheme_colours)
+            if scheme_colours is not None
+            else palette()
+        )
         install_css(colours, SETTINGS.get("compact_rows", False))
         for widget in (self.brand_logo, self.package_activity):
             if widget is None:
@@ -582,7 +625,9 @@ class PacmangrGUI(Gtk.Application):
             return GLib.SOURCE_REMOVE
         if self.operation_running:
             if manual:
-                self.set_status("Wait for the current package operation to finish before updating Pacmangr.")
+                self.set_status(
+                    "Wait for the current package operation to finish before updating Pacmangr."
+                )
             elif SETTINGS.get("auto_update_app", True):
                 GLib.timeout_add_seconds(60, self.check_app_updates)
             return GLib.SOURCE_REMOVE
@@ -603,7 +648,9 @@ class PacmangrGUI(Gtk.Application):
         def worker() -> None:
             try:
                 result = check_and_apply_update()
-            except Exception as exc:  # Keep an unexpected updater failure from leaving the UI busy.
+            except (
+                Exception
+            ) as exc:  # Keep an unexpected updater failure from leaving the UI busy.
                 result = UpdateResult("error", detail=str(exc))
             GLib.idle_add(self._finish_app_update_check, result, manual)
 
@@ -617,9 +664,7 @@ class PacmangrGUI(Gtk.Application):
             SETTINGS.set("last_app_update_check", time.time())
 
         if result.status == "updated":
-            message = (
-                f"Pacmangr updated to {result.commit[:8]}. Restart the app to load the update."
-            )
+            message = f"Pacmangr updated to {result.commit[:8]}. Restart the app to load the update."
         elif result.status == "current":
             message = f"Pacmangr is up to date ({result.commit[:8]})."
         elif result.status == "local_changes":
@@ -691,18 +736,28 @@ class PacmangrGUI(Gtk.Application):
         """Create the shared headless search engine once, off the GTK thread."""
         with self._search_engine_lock:
             if self._search_engine is None:
-                self._search_engine = CORE.headless_ui(tools=self.tools, cache=self.cache)
+                self._search_engine = CORE.headless_ui(
+                    tools=self.tools, cache=self.cache
+                )
             return self._search_engine
 
     def show_search_progress(self, items: list, heading: str) -> None:
         if self.view_mode != "browse":
             return
-        self.browse_items = list(items[:int(SETTINGS.get("max_results", MAX_GUI_RESULTS))])
+        self.browse_items = list(
+            items[: int(SETTINGS.get("max_results", MAX_GUI_RESULTS))]
+        )
         view = self.views["browse"]
         view.result_list.append_items(self.browse_items, heading)
 
-    def show_items(self, items: list, heading: str, remember: bool = True,
-                   auto_select: bool = True, row_factory=None) -> None:
+    def show_items(
+        self,
+        items: list,
+        heading: str,
+        remember: bool = True,
+        auto_select: bool = True,
+        row_factory=None,
+    ) -> None:
         max_r = int(SETTINGS.get("max_results", 250))
         if remember:
             self.raw_items = list(items)
@@ -753,7 +808,9 @@ class PacmangrGUI(Gtk.Application):
             self.details.on_versions()
 
     def finish_versions(self, item, versions: list, error: str) -> bool:
-        return bool(self.details and self.details.finish_versions(item, versions, error))
+        return bool(
+            self.details and self.details.finish_versions(item, versions, error)
+        )
 
     def on_package_files(self, *_args) -> None:
         if self.details:
@@ -842,7 +899,9 @@ class PacmangrGUI(Gtk.Application):
     def on_search(self, _widget=None) -> None:
         self.views["browse"].on_search(_widget)
 
-    def finish_search(self, request_id: int, query: str, items: list, error: str) -> bool:
+    def finish_search(
+        self, request_id: int, query: str, items: list, error: str
+    ) -> bool:
         return self.views["browse"].finish_search(request_id, query, items, error)
 
     def on_installed_filter_changed(self, entry) -> None:
@@ -897,7 +956,9 @@ class PacmangrGUI(Gtk.Application):
 
     def _show_updates_dialog(self, lines: list[str], error: str = "") -> bool:
         self.end_busy("updates-dialog")
-        self.set_status(f"Update check failed: {error}" if error else "Update check completed.")
+        self.set_status(
+            f"Update check failed: {error}" if error else "Update check completed."
+        )
         if error:
             self.show_text_dialog("Update Check Failed", error)
             return False
@@ -905,15 +966,20 @@ class PacmangrGUI(Gtk.Application):
         self.update_badges()
         self.views["updates"].populate(lines)
         if not lines:
-            self.show_text_dialog("System Up to Date", "Everything is up to date! No updates available.")
+            self.show_text_dialog(
+                "System Up to Date", "Everything is up to date! No updates available."
+            )
             return False
 
         detail = f"{len(lines)} updates available:\n\n" + "\n".join(lines[:40])
         if len(lines) > 40:
             detail += f"\n...and {len(lines) - 40} more."
         ask_confirmation(
-            self.window, f"{len(lines)} Package Updates Available", detail,
-            "Update All", lambda: self.confirm_update_all(),
+            self.window,
+            f"{len(lines)} Package Updates Available",
+            detail,
+            "Update All",
+            lambda: self.confirm_update_all(),
         )
         return False
 
@@ -924,7 +990,9 @@ class PacmangrGUI(Gtk.Application):
         show_text_dialog(self.window, title, detail)
 
     def show_manager_status(self, _widget=None) -> None:
-        self.show_text_dialog("Package manager status", show_manager_status(self.tools, self.sources))
+        self.show_text_dialog(
+            "Package manager status", show_manager_status(self.tools, self.sources)
+        )
 
     def show_cache_status(self, _widget=None) -> None:
         self.show_text_dialog("Local package cache", cache_summary(self.cache))
@@ -940,7 +1008,9 @@ class PacmangrGUI(Gtk.Application):
 
     def _clear_cache(self) -> None:
         removed = clear_cache_files(self.cache)
-        self.set_status("Local cache cleared." if removed else "Local cache was already empty.")
+        self.set_status(
+            "Local cache cleared." if removed else "Local cache was already empty."
+        )
 
     def export_package_list(self) -> None:
         if not self.all_installed:
@@ -954,7 +1024,11 @@ class PacmangrGUI(Gtk.Application):
                 "",
             ]
             for item in sorted(self.all_installed, key=lambda x: x.name):
-                reason = f" [{item.install_reason}]" if hasattr(item, "install_reason") else ""
+                reason = (
+                    f" [{item.install_reason}]"
+                    if hasattr(item, "install_reason")
+                    else ""
+                )
                 lines.append(f"{item.name} {item.version} ({item.source}){reason}")
             export_path.write_text("\n".join(lines), encoding="utf-8")
             self.set_status(f"Exported package list to {export_path}")
@@ -1023,7 +1097,9 @@ class PacmangrGUI(Gtk.Application):
             self.operation_progress.set_text("Starting package manager…")
             self.operation_progress.set_visible(True)
         if not self.operation_progress_source:
-            self.operation_progress_source = GLib.timeout_add(200, self.tick_operation_progress)
+            self.operation_progress_source = GLib.timeout_add(
+                200, self.tick_operation_progress
+            )
 
     def stop_operation_progress(self) -> None:
         if self.operation_progress_source:
@@ -1085,7 +1161,9 @@ class PacmangrGUI(Gtk.Application):
             self.set_status("Another package operation is already running.")
             return
         try:
-            argv = prepare_gui_operation(cmd, self.tools, "remove", shutil.which("pkexec"))
+            argv = prepare_gui_operation(
+                cmd, self.tools, "remove", shutil.which("pkexec")
+            )
         except RuntimeError as exc:
             self.set_status(str(exc))
             return
@@ -1097,8 +1175,11 @@ class PacmangrGUI(Gtk.Application):
             env.update({"DEBIAN_FRONTEND": "noninteractive", "LC_ALL": "C"})
             try:
                 code, output = run_streamed_operation(
-                    argv, env=env,
-                    on_line=lambda line: GLib.idle_add(self.update_operation_progress, line),
+                    argv,
+                    env=env,
+                    on_line=lambda line: GLib.idle_add(
+                        self.update_operation_progress, line
+                    ),
                     cancel_event=cancel_event,
                 )
             except OSError as exc:
@@ -1110,7 +1191,8 @@ class PacmangrGUI(Gtk.Application):
                 self.set_status(
                     f"{title} cancelled."
                     if code == 130
-                    else f"{title} completed." if code == 0
+                    else f"{title} completed."
+                    if code == 0
                     else f"{title} failed with code {code}."
                 )
                 if on_done and code == 0:
@@ -1138,18 +1220,25 @@ class PacmangrGUI(Gtk.Application):
         detail = (
             "All of the following native managers will run under ONE graphical "
             "authentication prompt:\n\n"
-            + "\n".join(f"• {label}: {shlex.join(command)}" for label, command in commands)
+            + "\n".join(
+                f"• {label}: {shlex.join(command)}" for label, command in commands
+            )
         )
         ask_confirmation(
-            self.window, "Update all package sources?", detail,
-            "Update all", lambda: self.launch_maintenance(commands),
+            self.window,
+            "Update all package sources?",
+            detail,
+            "Update all",
+            lambda: self.launch_maintenance(commands),
         )
 
     def _update_commands(self) -> list[tuple[str, list[str]]]:
         commands = CORE.system_update_commands(self.tools)
         filtered: list[tuple[str, list[str]]] = []
         for label, command in commands:
-            if label in {"yay", "paru"} and not SETTINGS.get("include_aur_updates", True):
+            if label in {"yay", "paru"} and not SETTINGS.get(
+                "include_aur_updates", True
+            ):
                 continue
             if label == "flatpak" and not SETTINGS.get("include_flatpak_updates", True):
                 continue
@@ -1175,7 +1264,8 @@ class PacmangrGUI(Gtk.Application):
                 return
 
         cancel_event = self._begin_operation(
-            "update", f"Updating {len(commands)} package sources with one authentication…"
+            "update",
+            f"Updating {len(commands)} package sources with one authentication…",
         )
 
         def worker() -> None:
@@ -1192,12 +1282,16 @@ class PacmangrGUI(Gtk.Application):
 
         start_thread(worker)
 
-    def finish_maintenance(self, code: int, output: str, cancelled: bool = False) -> bool:
+    def finish_maintenance(
+        self, code: int, output: str, cancelled: bool = False
+    ) -> bool:
         self._end_operation()
         self.set_detail_text(output or "No package-manager output.")
         self.set_status(
-            "Package update cancelled." if cancelled
-            else "All package updates completed." if code == 0
+            "Package update cancelled."
+            if cancelled
+            else "All package updates completed."
+            if code == 0
             else f"Package update stopped with status {code}."
         )
         if (code == 0 or cancelled) and self.installed_loaded:
@@ -1214,7 +1308,11 @@ class PacmangrGUI(Gtk.Application):
         item = self.current_item
         if not item or not self.window:
             return
-        if action == "install" and (item.source == "pip" or item.manager == "pip") and install_scope is None:
+        if (
+            action == "install"
+            and (item.source == "pip" or item.manager == "pip")
+            and install_scope is None
+        ):
             self.choose_pip_scope(item)
             return
 
@@ -1237,15 +1335,22 @@ class PacmangrGUI(Gtk.Application):
             self.launch_operation(action, item, command)
             return
 
-        action_label = "Clone" if action == "install" and item.source == "git" and not item.installed else action.title()
+        action_label = (
+            "Clone"
+            if action == "install" and item.source == "git" and not item.installed
+            else action.title()
+        )
         detail = (
             "This runs quietly in the background. If administrator access is "
             "needed, the desktop will show a graphical password prompt.\n\n"
             + shlex.join(command)
         )
         ask_confirmation(
-            self.window, f"{action_label} {item.title()}?", detail,
-            action_label, lambda: self.launch_operation(action, item, command),
+            self.window,
+            f"{action_label} {item.title()}?",
+            detail,
+            action_label,
+            lambda: self.launch_operation(action, item, command),
             danger=action == "remove",
         )
 
@@ -1275,7 +1380,9 @@ class PacmangrGUI(Gtk.Application):
 
         dialog.choose(self.window, None, finished)
 
-    def confirm_clean_orphans(self, names: list[str] | None = None, command: list[str] | None = None) -> None:
+    def confirm_clean_orphans(
+        self, names: list[str] | None = None, command: list[str] | None = None
+    ) -> None:
         orphans = sorted(names) if names else sorted(self.orphans_set)
         if not orphans:
             self.set_status("No orphan packages detected.")
@@ -1283,8 +1390,11 @@ class PacmangrGUI(Gtk.Application):
         if command is None:
             command = orphan_remove_command(orphans, self.tools)
         if not SETTINGS.get("confirm_orphan_removal", True):
-            self.launch_raw_operation("Remove orphans", command,
-                                      on_done=lambda: self.load_installed(force=True))
+            self.launch_raw_operation(
+                "Remove orphans",
+                command,
+                on_done=lambda: self.load_installed(force=True),
+            )
             return
 
         detail = (
@@ -1294,10 +1404,14 @@ class PacmangrGUI(Gtk.Application):
         if len(orphans) > 30:
             detail += f"\n...and {len(orphans) - 30} more."
         ask_confirmation(
-            self.window, f"Remove {len(orphans)} orphaned packages?", detail,
+            self.window,
+            f"Remove {len(orphans)} orphaned packages?",
+            detail,
             "Remove Orphans",
             lambda: self.launch_raw_operation(
-                "Remove orphans", command, on_done=lambda: self.load_installed(force=True)
+                "Remove orphans",
+                command,
+                on_done=lambda: self.load_installed(force=True),
             ),
             danger=True,
         )
@@ -1307,13 +1421,17 @@ class PacmangrGUI(Gtk.Application):
             self.set_status("Another package operation is already running.")
             return
         try:
-            argv = prepare_gui_operation(command, self.tools, action, shutil.which("pkexec"))
+            argv = prepare_gui_operation(
+                command, self.tools, action, shutil.which("pkexec")
+            )
         except RuntimeError as exc:
             self.set_status(str(exc))
             return
 
         verb = "Installing" if action == "install" else "Removing"
-        cancel_event = self._begin_operation(action, f"{verb} {item.title()} in the background…")
+        cancel_event = self._begin_operation(
+            action, f"{verb} {item.title()} in the background…"
+        )
 
         def worker() -> None:
             env = os.environ.copy()
@@ -1322,8 +1440,11 @@ class PacmangrGUI(Gtk.Application):
             env.setdefault("TERM", "xterm-256color")
             try:
                 code, output = run_streamed_operation(
-                    argv, env=env,
-                    on_line=lambda line: GLib.idle_add(self.update_operation_progress, line),
+                    argv,
+                    env=env,
+                    on_line=lambda line: GLib.idle_add(
+                        self.update_operation_progress, line
+                    ),
                     cancel_event=cancel_event,
                 )
             except OSError as exc:
@@ -1351,19 +1472,24 @@ class PacmangrGUI(Gtk.Application):
             if self.installed_loaded:
                 self.load_installed(force=True)
         elif code in {126, 127} and "pkexec" in text:
-            self.set_status("Graphical authentication is unavailable; package operation stopped.")
+            self.set_status(
+                "Graphical authentication is unavailable; package operation stopped."
+            )
         else:
             last_line = text.splitlines()[-1]
             self.set_status(f"{action.title()} failed ({code}): {last_line}")
 
         if self.current_item is item and self.details:
-            self.details.install_button.set_label("Reinstall" if item.installed else "Install")
+            self.details.install_button.set_label(
+                "Reinstall" if item.installed else "Install"
+            )
             if item.source == "git":
                 self.details.install_button.set_label(
                     "Update checkout" if item.installed else "Clone repository"
                 )
             self.details.install_button.set_sensitive(
-                item.source != "appimage" and (item.source != "git" or bool(self.tools.git))
+                item.source != "appimage"
+                and (item.source != "git" or bool(self.tools.git))
             )
             self.details.remove_button.set_sensitive(
                 (item.installed or item.source == "appimage") and item.source != "git"
@@ -1376,10 +1502,14 @@ class PacmangrGUI(Gtk.Application):
         terminal = shutil.which(preferred) if preferred != "auto" else None
         if not terminal:
             terminal = (
-                shutil.which("foot") or shutil.which("kitty")
-                or shutil.which("alacritty") or shutil.which("xterm")
+                shutil.which("foot")
+                or shutil.which("kitty")
+                or shutil.which("alacritty")
+                or shutil.which("xterm")
             )
-        backend = Path(CORE.__file__) if getattr(CORE, "__file__", None) else Path("pacmangr")
+        backend = (
+            Path(CORE.__file__) if getattr(CORE, "__file__", None) else Path("pacmangr")
+        )
         if not terminal:
             self.set_status("No terminal found.")
             return
@@ -1401,11 +1531,13 @@ class PacmangrGUI(Gtk.Application):
             return
         try:
             width, height = self.window.get_default_size()
-            SETTINGS.update({
-                "window_width": max(840, int(width)),
-                "window_height": max(560, int(height)),
-                "window_maximized": bool(self.window.is_maximized()),
-            })
+            SETTINGS.update(
+                {
+                    "window_width": max(840, int(width)),
+                    "window_height": max(560, int(height)),
+                    "window_maximized": bool(self.window.is_maximized()),
+                }
+            )
         except Exception:
             pass
 
