@@ -29,7 +29,7 @@ class Tools:
     extra_managers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def detect(cls) -> "Tools":
+    def detect(cls) -> Tools:
         return cls(
             pacman=shutil.which("pacman"),
             yay=shutil.which("yay"),
@@ -61,7 +61,18 @@ class Tools:
 
     def enabled_labels(self) -> str:
         labels = []
-        for label in ("pacman", "yay", "paru", "flatpak", "apt", "dpkg_query", "snap", "git", "pacseek", "downgrade"):
+        for label in (
+            "pacman",
+            "yay",
+            "paru",
+            "flatpak",
+            "apt",
+            "dpkg_query",
+            "snap",
+            "git",
+            "pacseek",
+            "downgrade",
+        ):
             if getattr(self, label):
                 labels.append("dpkg" if label == "dpkg_query" else label)
         labels.extend(name for name in self.extra_managers if name not in labels)
@@ -87,18 +98,32 @@ class PackageItem:
             return f"{self.name} ({self.package_id})"
         return self.name
 
-    def install_command(self, tools: Tools, install_scope: str = "user") -> list[str] | None:
+    def install_command(
+        self, tools: Tools, install_scope: str = "user"
+    ) -> list[str] | None:
         if self.source == "git":
             if not tools.git or not self.origin:
                 return None
             target = Path(self.package_id)
             if (target / ".git").is_dir():
                 return [tools.git, "-C", str(target), "pull", "--ff-only"]
-            return [sys.executable, str(constants.CLI_ENTRY_PATH), "_git-fetch", self.origin, str(target)]
+            return [
+                sys.executable,
+                str(constants.CLI_ENTRY_PATH),
+                "_git-fetch",
+                self.origin,
+                str(target),
+            ]
         if self.source == "pip" or self.manager == "pip":
             if install_scope not in {"venv", "user", "system"}:
                 return None
-            helper = [sys.executable, str(constants.CLI_ENTRY_PATH), "_pip-install", install_scope, self.package_id]
+            helper = [
+                sys.executable,
+                str(constants.CLI_ENTRY_PATH),
+                "_pip-install",
+                install_scope,
+                self.package_id,
+            ]
             if install_scope == "system":
                 return [tools.privilege, *helper] if tools.privilege else None
             return helper
@@ -117,7 +142,9 @@ class PackageItem:
             return None
         if self.source == "appimage":
             return None
-        generic = manager_spec_command(self.source, "install", tools, package=self.package_id)
+        generic = manager_spec_command(
+            self.source, "install", tools, package=self.package_id
+        )
         if generic:
             return generic
 
@@ -130,7 +157,9 @@ class PackageItem:
         return None
 
     def remove_command(self, tools: Tools) -> list[str] | None:
-        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith("venv:"):
+        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith(
+            "venv:"
+        ):
             target = Path(self.origin.removeprefix("venv:"))
             gio = shutil.which("gio")
             return [gio, "trash", str(target)] if gio else None
@@ -151,7 +180,9 @@ class PackageItem:
         if self.source == "appimage":
             rm = shutil.which("rm") or "/usr/bin/rm"
             return [rm, "-v", self.package_id]
-        generic = manager_spec_command(self.source, "remove", tools, package=self.package_id)
+        generic = manager_spec_command(
+            self.source, "remove", tools, package=self.package_id
+        )
         if generic:
             return generic
         if tools.pacman and tools.privilege:
@@ -159,16 +190,30 @@ class PackageItem:
         return None
 
     def info_command(self, tools: Tools, installed_view: bool) -> list[str] | None:
-        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith("venv:"):
+        if (self.source == "pip" or self.manager == "pip") and self.origin.startswith(
+            "venv:"
+        ):
             target = Path(self.origin.removeprefix("venv:"))
             python = target / "bin/python"
-            return [str(python), "-m", "pip", "show", self.package_id] if python.is_file() else None
+            return (
+                [str(python), "-m", "pip", "show", self.package_id]
+                if python.is_file()
+                else None
+            )
         if self.source == "git":
             if not tools.git:
                 return None
             target = Path(self.package_id)
             if (target / ".git").is_dir():
-                return [tools.git, "-C", str(target), "log", "-1", "--decorate", "--stat"]
+                return [
+                    tools.git,
+                    "-C",
+                    str(target),
+                    "log",
+                    "-1",
+                    "--decorate",
+                    "--stat",
+                ]
             return [tools.git, "ls-remote", "--symref", self.origin, "HEAD"]
         if self.source == "flatpak":
             if not tools.flatpak:
@@ -190,7 +235,9 @@ class PackageItem:
             return None
         if self.source == "appimage":
             return None
-        generic = manager_spec_command(self.source, "info", tools, package=self.package_id)
+        generic = manager_spec_command(
+            self.source, "info", tools, package=self.package_id
+        )
         if generic:
             return generic
 

@@ -1,20 +1,21 @@
 """Shared detail pane with automatic details on row selection."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import shutil
 import subprocess
 import threading
-from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk, Pango
 
-from .core_loader import CORE  # noqa: E402
-from .operations import fetch_github_files, fetch_github_readme, github_repo_slug  # noqa: E402
+from .core_loader import CORE
+from .operations import fetch_github_files, fetch_github_readme, github_repo_slug
 
 
 class DetailsPane(Gtk.Box):
@@ -122,13 +123,17 @@ class DetailsPane(Gtk.Box):
         self.install_button = Gtk.Button(label="Install")
         self.install_button.add_css_class("suggested-action")
         self.install_button.set_sensitive(False)
-        self.install_button.connect("clicked", lambda *_: self.app.confirm_action("install"))
+        self.install_button.connect(
+            "clicked", lambda *_: self.app.confirm_action("install")
+        )
         self.install_button.set_hexpand(True)
 
         self.remove_button = Gtk.Button(label="Remove")
         self.remove_button.add_css_class("danger")
         self.remove_button.set_sensitive(False)
-        self.remove_button.connect("clicked", lambda *_: self.app.confirm_action("remove"))
+        self.remove_button.connect(
+            "clicked", lambda *_: self.app.confirm_action("remove")
+        )
         self.remove_button.set_hexpand(True)
 
         self.website_button = Gtk.Button(label="Website")
@@ -208,15 +213,21 @@ class DetailsPane(Gtk.Box):
         self.status_pill.set_label("")
         self.status_pill.set_visible(False)
         self.status_pill.remove_css_class("orphan-pill")
-        self.detail_meta.set_text("Package details appear here. Click a package to load its details.")
+        self.detail_meta.set_text(
+            "Package details appear here. Click a package to load its details."
+        )
         self.detail_meta.set_halign(Gtk.Align.CENTER)
         self.detail_meta.set_xalign(0.5)
         self.set_text("")
         self.detail_section.set_visible(False)
         self.detail_scroller.set_visible(False)
         for button in (
-            self.info_button, self.versions_button, self.files_button,
-            self.copy_button, self.website_button, self.install_button,
+            self.info_button,
+            self.versions_button,
+            self.files_button,
+            self.copy_button,
+            self.website_button,
+            self.install_button,
             self.remove_button,
         ):
             button.set_sensitive(False)
@@ -242,8 +253,10 @@ class DetailsPane(Gtk.Box):
         elif getattr(item, "install_reason", "") == "dependency":
             state = "installed as dependency"
 
-        pill_text = "orphan" if getattr(item, "is_orphan", False) else (
-            "installed" if item.installed else "available"
+        pill_text = (
+            "orphan"
+            if getattr(item, "is_orphan", False)
+            else ("installed" if item.installed else "available")
         )
         self.status_pill.set_label(pill_text)
         self.status_pill.set_visible(True)
@@ -269,23 +282,32 @@ class DetailsPane(Gtk.Box):
             )
         self.set_text(description)
         self.detail_actions.set_visible(True)
-        self.info_button.set_label("README" if self._is_github_item(item) else "Overview")
-        self.info_button.set_sensitive(True)
-        supports_versions = (
-            item.source in {"pacman", "aur", "aur/local", "apt"}
-            or item.manager in {"pacman", "yay", "paru"}
+        self.info_button.set_label(
+            "README" if self._is_github_item(item) else "Overview"
         )
+        self.info_button.set_sensitive(True)
+        supports_versions = item.source in {
+            "pacman",
+            "aur",
+            "aur/local",
+            "apt",
+        } or item.manager in {"pacman", "yay", "paru"}
         self.versions_button.set_visible(supports_versions)
         self.versions_button.set_sensitive(supports_versions)
-        self.files_button.set_sensitive(bool(item.installed) or self._is_github_item(item))
+        self.files_button.set_sensitive(
+            bool(item.installed) or self._is_github_item(item)
+        )
         self.copy_button.set_sensitive(True)
         self.website_button.set_sensitive(True)
         self.install_button.set_label("Reinstall" if item.installed else "Install")
         if item.source == "git":
-            self.install_button.set_label("Update checkout" if item.installed else "Clone repository")
+            self.install_button.set_label(
+                "Update checkout" if item.installed else "Clone repository"
+            )
         tools = self.app.tools
         self.install_button.set_sensitive(
-            item.source != "appimage" and (item.source != "git" or bool(getattr(tools, "git", None)))
+            item.source != "appimage"
+            and (item.source != "git" or bool(getattr(tools, "git", None)))
         )
         self.remove_button.set_sensitive(
             (item.installed or item.source == "appimage") and item.source != "git"
@@ -332,7 +354,9 @@ class DetailsPane(Gtk.Box):
         if self._is_github_item(item):
             self._load_readme(item)
             return
-        installed_view = self.app.view_mode in {"installed", "orphans"} or bool(item.installed)
+        installed_view = self.app.view_mode in {"installed", "orphans"} or bool(
+            item.installed
+        )
         command = item.info_command(self.app.tools, installed_view)
         if not command:
             self._cancel_detail_activity()
@@ -351,7 +375,9 @@ class DetailsPane(Gtk.Box):
         threading.Thread(target=worker, daemon=True).start()
 
     def _load_readme(self, item) -> None:
-        slug = github_repo_slug(item) or getattr(item, "github_full_name", "this repository")
+        slug = github_repo_slug(item) or getattr(
+            item, "github_full_name", "this repository"
+        )
         self.set_text(f"Loading README.md for {slug}…")
         generation = self._begin_detail_activity(f"Loading README.md for {slug}…")
 
@@ -380,7 +406,9 @@ class DetailsPane(Gtk.Box):
         self.app.set_status(f"Loaded README.md for {slug}")
         return False
 
-    def finish_info(self, item, code: int, output: str, generation: int | None = None) -> bool:
+    def finish_info(
+        self, item, code: int, output: str, generation: int | None = None
+    ) -> bool:
         if generation is None:
             generation = self._detail_generation
         self._end_detail_activity(generation)
@@ -389,7 +417,8 @@ class DetailsPane(Gtk.Box):
         text = output.strip() or "No details are available."
         self.set_text(text)
         self.app.set_status(
-            f"Loaded details for {item.title()}." if code == 0
+            f"Loaded details for {item.title()}."
+            if code == 0
             else f"Details command exited {code}."
         )
         return False
@@ -402,7 +431,9 @@ class DetailsPane(Gtk.Box):
         cached = self.app.cache.load_versions(manager, item.package_id)
         if cached:
             self.set_text(CORE.format_versions(item.package_id, cached))
-        generation = self._begin_detail_activity(f"Checking versions for {item.title()}…")
+        generation = self._begin_detail_activity(
+            f"Checking versions for {item.title()}…"
+        )
 
         def worker() -> None:
             try:
@@ -436,7 +467,9 @@ class DetailsPane(Gtk.Box):
             return
         if self._is_github_item(item):
             self.set_text(f"Loading files for {github_repo_slug(item)}…")
-            generation = self._begin_detail_activity(f"Loading repository files for {item.title()}…")
+            generation = self._begin_detail_activity(
+                f"Loading repository files for {item.title()}…"
+            )
 
             def github_worker() -> None:
                 try:
@@ -447,11 +480,15 @@ class DetailsPane(Gtk.Box):
 
             threading.Thread(target=github_worker, daemon=True).start()
             return
-        generation = self._begin_detail_activity(f"Listing installed files for {item.title()}…")
+        generation = self._begin_detail_activity(
+            f"Listing installed files for {item.title()}…"
+        )
 
         def worker() -> None:
             try:
-                pacman = getattr(self.app.tools, "pacman", None) or shutil.which("pacman")
+                pacman = getattr(self.app.tools, "pacman", None) or shutil.which(
+                    "pacman"
+                )
                 if pacman and item.source in {"pacman", "aur", "aur/local"}:
                     out = subprocess.check_output(
                         [pacman, "-Ql", item.name], text=True, stderr=subprocess.STDOUT
@@ -461,10 +498,15 @@ class DetailsPane(Gtk.Box):
                 GLib.idle_add(self._finish_package_files, item, out, generation)
             except subprocess.CalledProcessError as err:
                 GLib.idle_add(
-                    self._finish_package_files, item, f"Could not list files: {err.output}", generation
+                    self._finish_package_files,
+                    item,
+                    f"Could not list files: {err.output}",
+                    generation,
                 )
             except Exception as exc:
-                GLib.idle_add(self._finish_package_files, item, f"Error: {exc}", generation)
+                GLib.idle_add(
+                    self._finish_package_files, item, f"Error: {exc}", generation
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -511,11 +553,15 @@ class DetailsPane(Gtk.Box):
             if item.origin and item.origin.startswith(("http://", "https://")):
                 url = item.origin
             elif item.source in {"pacman", "aur", "aur/local"}:
-                pacman = getattr(self.app.tools, "pacman", None) or shutil.which("pacman")
+                pacman = getattr(self.app.tools, "pacman", None) or shutil.which(
+                    "pacman"
+                )
                 if pacman:
                     try:
                         out = subprocess.check_output(
-                            [pacman, "-Qi", item.name], text=True, stderr=subprocess.DEVNULL
+                            [pacman, "-Qi", item.name],
+                            text=True,
+                            stderr=subprocess.DEVNULL,
                         )
                         for line in out.splitlines():
                             if line.startswith("URL"):

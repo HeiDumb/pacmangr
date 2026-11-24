@@ -6,6 +6,10 @@ import shutil
 from pathlib import Path
 
 from . import constants
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import Tools
 
 
 def detect_extra_managers() -> dict[str, str]:
@@ -23,7 +27,7 @@ def detect_extra_managers() -> dict[str, str]:
 def manager_spec_command(
     manager: str,
     action: str,
-    tools: "Tools",
+    tools: Tools,
     package: str = "",
     query: str = "",
 ) -> list[str] | None:
@@ -47,9 +51,12 @@ def manager_spec_command(
     return cmd
 
 
-def system_update_commands(tools: "Tools", source: str = "all") -> list[tuple[str, list[str]]]:
+def system_update_commands(
+    tools: Tools, source: str = "all"
+) -> list[tuple[str, list[str]]]:
     """Return native update commands without executing or merging package ecosystems."""
     from .backends import managed_git_checkouts
+
     commands: list[tuple[str, list[str]]] = []
     if source in {"all", "pacman", "aur"}:
         helper = tools.aur_helper
@@ -61,15 +68,22 @@ def system_update_commands(tools: "Tools", source: str = "all") -> list[tuple[st
     if source in {"all", "flatpak"} and tools.flatpak:
         commands.append(("flatpak", [tools.flatpak, "update"]))
     if source in {"all", "apt"} and tools.apt and tools.privilege:
-        commands.extend([
-            ("apt metadata", [tools.privilege, tools.apt, "update"]),
-            ("apt packages", [tools.privilege, tools.apt, "upgrade"]),
-        ])
+        commands.extend(
+            [
+                ("apt metadata", [tools.privilege, tools.apt, "update"]),
+                ("apt packages", [tools.privilege, tools.apt, "upgrade"]),
+            ]
+        )
     if source in {"all", "snap"} and tools.snap and tools.privilege:
         commands.append(("snap", [tools.privilege, tools.snap, "refresh"]))
     if source in {"all", "git"} and tools.git:
         for item in managed_git_checkouts(tools):
-            commands.append((f"git · {item.name}", [tools.git, "-C", item.package_id, "pull", "--ff-only"]))
+            commands.append(
+                (
+                    f"git · {item.name}",
+                    [tools.git, "-C", item.package_id, "pull", "--ff-only"],
+                )
+            )
     for manager in tools.extra_managers:
         if source not in {"all", manager}:
             continue
@@ -86,12 +100,20 @@ def noninteractive_command(command: list[str]) -> list[str]:
     if real_index >= len(prepared):
         return prepared
     tool = Path(prepared[real_index]).name
-    tail = prepared[real_index + 1:]
+    tail = prepared[real_index + 1 :]
     if tool in {"pacman", "yay", "paru"} and "--noconfirm" not in tail:
         prepared.insert(real_index + 1, "--noconfirm")
     elif tool == "flatpak" and "-y" not in tail:
         prepared.append("-y")
-    elif tool in {"apt", "apt-get", "dnf", "zypper", "xbps-install", "xbps-remove", "pkg"}:
+    elif tool in {
+        "apt",
+        "apt-get",
+        "dnf",
+        "zypper",
+        "xbps-install",
+        "xbps-remove",
+        "pkg",
+    }:
         if "-y" not in tail and "--non-interactive" not in tail:
             prepared.append("--non-interactive" if tool == "zypper" else "-y")
     elif tool == "pip" and "uninstall" in tail and "-y" not in tail:

@@ -6,7 +6,6 @@ import json
 import re
 
 from . import constants
-
 from .constants import (
     CARGO_SEARCH_RE,
     MAX_RESULTS,
@@ -402,7 +401,11 @@ def parse_pipx_installed(output: str) -> list[PackageItem]:
     venvs = data.get("venvs", {}) if isinstance(data, dict) else {}
     items: list[PackageItem] = []
     for name, meta in venvs.items():
-        package = meta.get("metadata", {}).get("main_package", {}) if isinstance(meta, dict) else {}
+        package = (
+            meta.get("metadata", {}).get("main_package", {})
+            if isinstance(meta, dict)
+            else {}
+        )
         items.append(
             PackageItem(
                 source="pipx",
@@ -417,11 +420,15 @@ def parse_pipx_installed(output: str) -> list[PackageItem]:
     return items
 
 
-def parse_generic_search(manager: str, output: str, installed_names: set[str]) -> list[PackageItem]:
+def parse_generic_search(
+    manager: str, output: str, installed_names: set[str]
+) -> list[PackageItem]:
     items: list[PackageItem] = []
     for raw_line in output.splitlines():
         line = raw_line.strip()
-        if not line or line.startswith(("Loaded ", "Available ", "Last metadata", "Name ", "====")):
+        if not line or line.startswith(
+            ("Loaded ", "Available ", "Last metadata", "Name ", "====")
+        ):
             continue
         name = ""
         version = ""
@@ -505,7 +512,9 @@ def parse_generic_installed(manager: str, output: str) -> list[PackageItem]:
     return items
 
 
-def parse_manager_search(manager: str, output: str, installed_names: set[str]) -> list[PackageItem]:
+def parse_manager_search(
+    manager: str, output: str, installed_names: set[str]
+) -> list[PackageItem]:
     parser = constants.MANAGER_SPECS.get(manager, {}).get("parser")
     if parser == "cargo":
         return parse_cargo_search(output, installed_names)
@@ -527,5 +536,3 @@ def parse_manager_installed(manager: str, output: str) -> list[PackageItem]:
     if parser == "pipx":
         return parse_pipx_installed(output)
     return parse_generic_installed(manager, output)
-
-

@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import re
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import constants
 from .commands import manager_spec_command
@@ -35,7 +35,9 @@ def git_checkout_slug(url: str) -> str:
     else:
         path = urllib.parse.urlparse(candidate).path.lstrip("/")
     path = re.sub(r"\.git$", "", path)
-    parts = [re.sub(r"[^A-Za-z0-9_.+-]+", "-", part) for part in path.split("/") if part]
+    parts = [
+        re.sub(r"[^A-Za-z0-9_.+-]+", "-", part) for part in path.split("/") if part
+    ]
     slug = "--".join(parts[-2:]) if parts else "repository"
     return slug.strip("-.") or "repository"
 
@@ -66,11 +68,20 @@ def managed_git_checkouts(tools: Tools) -> list[PackageItem]:
     for target in sorted(constants.GIT_SOURCE_ROOT.iterdir()):
         if not (target / ".git").is_dir():
             continue
-        code, output = run_capture([tools.git, "-C", str(target), "remote", "get-url", "origin"], timeout=5)
+        code, output = run_capture(
+            [tools.git, "-C", str(target), "remote", "get-url", "origin"], timeout=5
+        )
         url = output.strip() if code == 0 else ""
         item = git_package(url) if url else None
         if item is None:
-            item = PackageItem("git", "git", target.name, str(target), installed=True, repo="managed Git checkout")
+            item = PackageItem(
+                "git",
+                "git",
+                target.name,
+                str(target),
+                installed=True,
+                repo="managed Git checkout",
+            )
         item.package_id = str(target)
         item.installed = True
         items.append(item)
@@ -91,16 +102,18 @@ def managed_pip_venvs() -> list[PackageItem]:
             continue
         if not package:
             continue
-        items.append(PackageItem(
-            source="pip",
-            manager="pip",
-            name=package,
-            package_id=package,
-            repo="isolated venv",
-            installed=True,
-            origin=f"venv:{target}",
-            description=f"Isolated Python environment: {target}",
-        ))
+        items.append(
+            PackageItem(
+                source="pip",
+                manager="pip",
+                name=package,
+                package_id=package,
+                repo="isolated venv",
+                installed=True,
+                origin=f"venv:{target}",
+                description=f"Isolated Python environment: {target}",
+            )
+        )
     return items
 
 
@@ -166,8 +179,6 @@ def find_appimages(query: str = "") -> list[PackageItem]:
     return sorted(items, key=lambda item: item.name.lower())
 
 
-
-
 def collect_installed_packages(
     tools: Tools,
     log: Callable[[str], None] | None = None,
@@ -176,7 +187,9 @@ def collect_installed_packages(
     items: list[PackageItem] = []
     if tools.pacman:
         _, foreign_output = run_capture([tools.pacman, "-Qqm"], timeout=20)
-        foreign_names = {line.strip() for line in foreign_output.splitlines() if line.strip()}
+        foreign_names = {
+            line.strip() for line in foreign_output.splitlines() if line.strip()
+        }
         code, output = run_capture([tools.pacman, "-Q"], timeout=30)
         if code == 0:
             items.extend(parse_pacman_installed(output, foreign_names))
@@ -184,7 +197,9 @@ def collect_installed_packages(
             report(f"pacman installed list exited {code}:\n{output.strip()}")
 
     if tools.flatpak:
-        code, output = run_capture([tools.flatpak, "list", "--app", "--json"], timeout=30)
+        code, output = run_capture(
+            [tools.flatpak, "list", "--app", "--json"], timeout=30
+        )
         if code == 0:
             items.extend(parse_flatpak_installed(output))
         else:

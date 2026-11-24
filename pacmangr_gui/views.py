@@ -1,6 +1,7 @@
 """The five navigable content views and their search/filter/load logic."""
 
 # Views: Browse & Install, Installed, Updates, GitHub and Orphaned Packages.
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -16,18 +17,18 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
-from .core_loader import CORE, MAX_GUI_RESULTS  # noqa: E402
-from .operations import (  # noqa: E402
+from .core_loader import CORE, MAX_GUI_RESULTS
+from .operations import (
     available_update_lines,
     collect_installed_metadata,
     github_repo_slug,
     orphan_remove_command,
     resolve_github_default_branch,
 )
-from .settings import SETTINGS  # noqa: E402
-from .widgets import EmptyState, PackageRow, load_source_icon  # noqa: E402
+from .settings import SETTINGS
+from .widgets import EmptyState, PackageRow, load_source_icon
 
 KIND_OPTIONS = ("all", "explicit", "dependency", "orphan")
 KINDS = KIND_OPTIONS
@@ -50,7 +51,9 @@ class ResultList(Gtk.Box):
         self.heading.set_margin_end(16)
         self.append(self.heading)
 
-        self.placeholder = EmptyState("No packages to show", placeholder, "edit-find-symbolic")
+        self.placeholder = EmptyState(
+            "No packages to show", placeholder, "edit-find-symbolic"
+        )
         self.list_box = Gtk.ListBox()
         self.list_box.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.list_box.connect("row-selected", self._row_selected)
@@ -73,8 +76,9 @@ class ResultList(Gtk.Box):
         while child := self.list_box.get_first_child():
             self.list_box.remove(child)
 
-    def populate(self, items: list, heading: str, *, auto_select: bool = True,
-                 row_factory=None) -> None:
+    def populate(
+        self, items: list, heading: str, *, auto_select: bool = True, row_factory=None
+    ) -> None:
         self.heading.set_text(heading)
         self.clear()
         compact = self.app.view_mode in {"installed", "orphans"}
@@ -153,12 +157,16 @@ class BrowseView(BaseView):
         search_row.add_css_class("search-control")
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.add_css_class("search-field")
-        self.search_entry.set_placeholder_text("Search packages, or find repositories on GitHub…")
+        self.search_entry.set_placeholder_text(
+            "Search packages, or find repositories on GitHub…"
+        )
         self.search_entry.set_hexpand(True)
         self.search_entry.connect("activate", self.on_search)
         search_row.append(self.search_entry)
 
-        self.source_dropdown = Gtk.DropDown.new_from_strings([label for label, _key in self.sources])
+        self.source_dropdown = Gtk.DropDown.new_from_strings(
+            [label for label, _key in self.sources]
+        )
         self.source_dropdown.add_css_class("search-source")
         self.source_dropdown.set_tooltip_text("Choose which package source to search")
         self.source_dropdown.set_size_request(154, -1)
@@ -247,7 +255,9 @@ class BrowseView(BaseView):
                     GLib.idle_add(self._show_partial_results, request_id, query, ranked)
 
                 results = engine.search_packages(query, backend, on_results=on_results)
-                results = engine.rank_results(engine.dedupe_items(cached + results), query)
+                results = engine.rank_results(
+                    engine.dedupe_items(cached + results), query
+                )
                 GLib.idle_add(self.finish_search, request_id, query, results, "")
             except Exception as exc:
                 GLib.idle_add(self.finish_search, request_id, query, [], str(exc))
@@ -285,11 +295,19 @@ class BrowseView(BaseView):
                 results = GitHubView._to_items(payload)
                 GLib.idle_add(self.finish_search, request_id, query, results, "")
             except Exception as exc:
-                GLib.idle_add(self.finish_search, request_id, query, [], f"GitHub search failed: {exc}")
+                GLib.idle_add(
+                    self.finish_search,
+                    request_id,
+                    query,
+                    [],
+                    f"GitHub search failed: {exc}",
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def finish_search(self, request_id: int, query: str, items: list, error: str) -> bool:
+    def finish_search(
+        self, request_id: int, query: str, items: list, error: str
+    ) -> bool:
         app = self.app
         app.end_search_activity(request_id)
         if request_id != app.request_id or app.view_mode != "browse":
@@ -319,16 +337,22 @@ class InstalledView(BaseView):
         filter_row.add_css_class("search-control")
         self.filter_entry = Gtk.SearchEntry()
         self.filter_entry.add_css_class("search-field")
-        self.filter_entry.set_placeholder_text("Filter installed packages by name, description, or tag…")
+        self.filter_entry.set_placeholder_text(
+            "Filter installed packages by name, description, or tag…"
+        )
         self.filter_entry.set_hexpand(True)
         self.filter_entry.connect("search-changed", self.on_filter_changed)
         filter_row.append(self.filter_entry)
 
-        self.source_dropdown = Gtk.DropDown.new_from_strings([label for label, _key in self.sources])
+        self.source_dropdown = Gtk.DropDown.new_from_strings(
+            [label for label, _key in self.sources]
+        )
         self.source_dropdown.add_css_class("search-source")
         self.source_dropdown.set_tooltip_text("Filter by package source")
         self.source_dropdown.set_size_request(150, -1)
-        self.source_dropdown.connect("notify::selected", lambda *_: self.filter_installed())
+        self.source_dropdown.connect(
+            "notify::selected", lambda *_: self.filter_installed()
+        )
         filter_row.append(self.source_dropdown)
         self.toolbar.append(filter_row)
 
@@ -336,7 +360,9 @@ class InstalledView(BaseView):
         self.kind_dropdown = Gtk.DropDown.new_from_strings(
             ["All packages", "Explicitly installed", "Dependencies", "Orphans"]
         )
-        self.kind_dropdown.set_tooltip_text("Filter installed packages by install reason")
+        self.kind_dropdown.set_tooltip_text(
+            "Filter installed packages by install reason"
+        )
         self.kind_dropdown.set_size_request(190, -1)
         self.kind_dropdown.set_selected(0)
         self.kind_dropdown.connect("notify::selected", self.on_kind_changed)
@@ -402,10 +428,15 @@ class InstalledView(BaseView):
                 continue
             if kind == "explicit" and getattr(item, "install_reason", "") != "explicit":
                 continue
-            if kind == "dependency" and getattr(item, "install_reason", "") != "dependency":
+            if (
+                kind == "dependency"
+                and getattr(item, "install_reason", "") != "dependency"
+            ):
                 continue
             if query:
-                haystack = f"{item.name} {item.package_id} {item.description or ''}".lower()
+                haystack = (
+                    f"{item.name} {item.package_id} {item.description or ''}".lower()
+                )
                 if query not in haystack:
                     continue
             filtered.append(item)
@@ -416,7 +447,9 @@ class InstalledView(BaseView):
         if kind != "all":
             heading_parts.append(f"({kind} only)")
         if app.view_mode == "installed":
-            app.show_items(filtered, " · ".join(heading_parts), remember=False, auto_select=False)
+            app.show_items(
+                filtered, " · ".join(heading_parts), remember=False, auto_select=False
+            )
             app.set_status(f"{len(filtered)} installed packages matching filter.")
 
     def load_installed(self, force: bool = False) -> None:
@@ -433,7 +466,9 @@ class InstalledView(BaseView):
 
         def worker() -> None:
             try:
-                explicit, deps, orphans = collect_installed_metadata(getattr(app.tools, "pacman", None))
+                explicit, deps, orphans = collect_installed_metadata(
+                    getattr(app.tools, "pacman", None)
+                )
                 items = CORE.collect_installed_packages(app.tools)
                 for item in items:
                     name = item.name
@@ -463,7 +498,13 @@ class InstalledView(BaseView):
             except Exception as exc:
                 GLib.idle_add(
                     self._finish_load_installed,
-                    [], set(), set(), set(), str(exc), show_progress, busy_token,
+                    [],
+                    set(),
+                    set(),
+                    set(),
+                    str(exc),
+                    show_progress,
+                    busy_token,
                 )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -474,8 +515,14 @@ class InstalledView(BaseView):
         self.filter_installed()
 
     def _finish_load_installed(
-        self, items: list, explicit: set, deps: set, orphans: set, error: str,
-        show_progress: bool = False, busy_token: str = "",
+        self,
+        items: list,
+        explicit: set,
+        deps: set,
+        orphans: set,
+        error: str,
+        show_progress: bool = False,
+        busy_token: str = "",
     ) -> bool:
         app = self.app
         if busy_token:
@@ -547,11 +594,16 @@ class UpdatesView(BaseView):
 
         self.update_all_button = Gtk.Button(label="Update everything")
         self.update_all_button.add_css_class("suggested-action")
-        self.update_all_button.connect("clicked", lambda *_: self.app.confirm_update_all())
+        self.update_all_button.connect(
+            "clicked", lambda *_: self.app.confirm_update_all()
+        )
         action_row.append(self.update_all_button)
         self.toolbar.append(action_row)
-        self.set_placeholder("Checking for updates", "Pacmangr checks available updates automatically.",
-                             "software-update-available-symbolic")
+        self.set_placeholder(
+            "Checking for updates",
+            "Pacmangr checks available updates automatically.",
+            "software-update-available-symbolic",
+        )
 
     def focus(self) -> None:
         self.update_all_button.grab_focus()
@@ -579,7 +631,9 @@ class UpdatesView(BaseView):
         if error:
             if self.app.view_mode == "updates":
                 self.app.set_status(f"Update check failed: {error}")
-                self.set_placeholder("Update check failed", error, "dialog-warning-symbolic")
+                self.set_placeholder(
+                    "Update check failed", error, "dialog-warning-symbolic"
+                )
             return False
         self.lines = list(lines)
         self.app.update_lines = lines
@@ -589,7 +643,9 @@ class UpdatesView(BaseView):
         status = self.app.status_label.get_text() if self.app.status_label else ""
         if self.app.view_mode == "updates" or status == "Checking for updates…":
             self.app.set_status(
-                f"{len(lines)} updates available." if lines else "All checked packages are up to date."
+                f"{len(lines)} updates available."
+                if lines
+                else "All checked packages are up to date."
             )
         return False
 
@@ -633,7 +689,9 @@ class GitHubRepoRow(Gtk.ListBoxRow):
         avatar.add_css_class("package-icon")
         load_source_icon(avatar, item)
         top.append(avatar)
-        name = Gtk.Label(label=getattr(item, "github_full_name", item.title()), xalign=0)
+        name = Gtk.Label(
+            label=getattr(item, "github_full_name", item.title()), xalign=0
+        )
         name.set_hexpand(True)
         name.set_ellipsize(2)
         name.add_css_class("package-name")
@@ -645,7 +703,8 @@ class GitHubRepoRow(Gtk.ListBoxRow):
         card.append(top)
 
         description = Gtk.Label(
-            label=getattr(item, "github_description", "") or "No description provided.", xalign=0
+            label=getattr(item, "github_description", "") or "No description provided.",
+            xalign=0,
         )
         description.set_wrap(True)
         description.set_max_width_chars(90)
@@ -664,9 +723,13 @@ class GitHubRepoRow(Gtk.ListBoxRow):
         card.append(meta)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        clone = Gtk.Button(label="Update checkout" if item.installed else "Clone / Install")
+        clone = Gtk.Button(
+            label="Update checkout" if item.installed else "Clone / Install"
+        )
         clone.add_css_class("flat" if item.installed else "suggested-action")
-        clone.set_tooltip_text("Fetch this repository into Pacmangr's managed Git directory")
+        clone.set_tooltip_text(
+            "Fetch this repository into Pacmangr's managed Git directory"
+        )
         clone.connect("clicked", lambda *_: on_install(item))
         open_button = Gtk.Button(label="Open")
         open_button.add_css_class("flat")
@@ -693,7 +756,9 @@ class GitHubView(BaseView):
 
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.add_css_class("search-field")
-        self.search_entry.set_placeholder_text("Search repositories, or paste a GitHub / Git URL…")
+        self.search_entry.set_placeholder_text(
+            "Search repositories, or paste a GitHub / Git URL…"
+        )
         self.search_entry.set_hexpand(True)
         self.search_entry.connect("activate", self.on_search)
         search_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -708,13 +773,16 @@ class GitHubView(BaseView):
 
         self.open_button = Gtk.Button.new_from_icon_name("web-browser-symbolic")
         self.open_button.add_css_class("open-search-button")
-        self.open_button.set_tooltip_text("Open a pasted GitHub/Git URL in your browser")
+        self.open_button.set_tooltip_text(
+            "Open a pasted GitHub/Git URL in your browser"
+        )
         self.open_button.connect("clicked", self.on_open_url)
         search_row.append(self.open_button)
         self.toolbar.append(search_row)
 
         hint = Gtk.Label(
-            label="Public repositories · unauthenticated API · rate limits may apply", xalign=0
+            label="Public repositories · unauthenticated API · rate limits may apply",
+            xalign=0,
         )
         hint.add_css_class("muted")
         hint.add_css_class("section-label")
@@ -765,7 +833,9 @@ class GitHubView(BaseView):
         if slug:
             item.github_full_name = slug
             item.github_html_url = f"https://github.com/{slug}"
-            item.github_avatar_url = f"https://github.com/{slug.split('/', 1)[0]}.png?size=96"
+            item.github_avatar_url = (
+                f"https://github.com/{slug.split('/', 1)[0]}.png?size=96"
+            )
             item.icon_url = item.github_avatar_url
             item.github_description = "README.md is available in the Details pane."
             item.github_default_branch = ""
@@ -832,7 +902,9 @@ class GitHubView(BaseView):
                 auto_select=False,
                 row_factory=self._make_row,
             )
-            app.set_status(f"Showing {len(cached_items)} cached repositories while refreshing GitHub…")
+            app.set_status(
+                f"Showing {len(cached_items)} cached repositories while refreshing GitHub…"
+            )
         else:
             self.result_list.clear()
             self.result_list.heading.set_text("Searching GitHub…")
@@ -862,14 +934,24 @@ class GitHubView(BaseView):
             except urllib.error.URLError as exc:
                 reason = getattr(exc, "reason", exc)
                 GLib.idle_add(
-                    self.finish, request_id, query, [], f"Could not reach GitHub: {reason}"
+                    self.finish,
+                    request_id,
+                    query,
+                    [],
+                    f"Could not reach GitHub: {reason}",
                 )
             except (ValueError, TypeError) as exc:
                 GLib.idle_add(
-                    self.finish, request_id, query, [], f"GitHub returned unreadable data: {exc}"
+                    self.finish,
+                    request_id,
+                    query,
+                    [],
+                    f"GitHub returned unreadable data: {exc}",
                 )
             except Exception as exc:  # noqa: BLE001 - keep background failures graceful.
-                GLib.idle_add(self.finish, request_id, query, [], f"GitHub search failed: {exc}")
+                GLib.idle_add(
+                    self.finish, request_id, query, [], f"GitHub search failed: {exc}"
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -902,7 +984,9 @@ class GitHubView(BaseView):
             forks = int(repo.get("forks_count") or 0)
             language = repo.get("language") or ""
             license_info = repo.get("license") or {}
-            license_name = license_info.get("spdx_id") if isinstance(license_info, dict) else ""
+            license_name = (
+                license_info.get("spdx_id") if isinstance(license_info, dict) else ""
+            )
             html_url = repo.get("html_url") or clone_url
             description = repo.get("description") or "No description provided."
 
@@ -917,7 +1001,9 @@ class GitHubView(BaseView):
             item.github_html_url = html_url
             item.github_default_branch = repo.get("default_branch") or ""
             owner = repo.get("owner") or {}
-            item.github_avatar_url = owner.get("avatar_url", "") if isinstance(owner, dict) else ""
+            item.github_avatar_url = (
+                owner.get("avatar_url", "") if isinstance(owner, dict) else ""
+            )
             item.icon_url = item.github_avatar_url
             item.repo = f"★ {stars:,} · {forks:,} forks"
             extra = []
@@ -925,7 +1011,9 @@ class GitHubView(BaseView):
                 extra.append(language)
             if license_name and license_name != "NOASSERTION":
                 extra.append(f"license: {license_name}")
-            extra.append("Clone uses Pacmangr's managed Git directory; build scripts are not run automatically.")
+            extra.append(
+                "Clone uses Pacmangr's managed Git directory; build scripts are not run automatically."
+            )
             item.description = f"{description}\n\n{' · '.join(extra)}"
             items.append(item)
         return items
@@ -936,7 +1024,9 @@ class GitHubView(BaseView):
         if not error:
             self._result_cache[query.casefold()] = (time.monotonic(), list(items))
             if len(self._result_cache) > 24:
-                oldest = min(self._result_cache, key=lambda key: self._result_cache[key][0])
+                oldest = min(
+                    self._result_cache, key=lambda key: self._result_cache[key][0]
+                )
                 self._result_cache.pop(oldest, None)
         if request_id != app.request_id:
             return False
@@ -959,7 +1049,9 @@ class GitHubView(BaseView):
                 )
                 return False
             self._show_items([], "GitHub search unavailable")
-            self.set_placeholder("GitHub search unavailable", error, "dialog-warning-symbolic")
+            self.set_placeholder(
+                "GitHub search unavailable", error, "dialog-warning-symbolic"
+            )
             app.set_status(error)
             return False
         if not items:
@@ -990,7 +1082,9 @@ class OrphansView(BaseView):
         refresh = Gtk.Button()
         refresh.set_child(Gtk.Image.new_from_icon_name("view-refresh-symbolic"))
         refresh.set_tooltip_text("Rescan installed packages")
-        refresh.connect("clicked", lambda *_: self.app.views["installed"].load_installed(force=True))
+        refresh.connect(
+            "clicked", lambda *_: self.app.views["installed"].load_installed(force=True)
+        )
         action_row.append(refresh)
 
         self.remove_selected = Gtk.Button(label="Remove selected")
@@ -1003,8 +1097,11 @@ class OrphansView(BaseView):
         self.remove_all.connect("clicked", lambda *_: self._remove(True))
         action_row.append(self.remove_all)
         self.toolbar.append(action_row)
-        self.set_placeholder("No orphans detected", "Installed packages will be scanned automatically.",
-                             "edit-delete-symbolic")
+        self.set_placeholder(
+            "No orphans detected",
+            "Installed packages will be scanned automatically.",
+            "edit-delete-symbolic",
+        )
 
     def focus(self) -> None:
         self.remove_all.grab_focus()
@@ -1016,16 +1113,27 @@ class OrphansView(BaseView):
         for name in sorted(app.orphans_set):
             item = by_name.get(name)
             if item is None:
-                item = CORE.PackageItem("pacman", "pacman", name, name, installed=True,
-                                        description="Unused package dependency")
+                item = CORE.PackageItem(
+                    "pacman",
+                    "pacman",
+                    name,
+                    name,
+                    installed=True,
+                    description="Unused package dependency",
+                )
             item.is_orphan = True
             item.install_reason = "orphan"
             item.installed = True
             items.append(item)
-        app.show_items(items, f"{len(items)} orphaned packages", remember=False, auto_select=False)
+        app.show_items(
+            items, f"{len(items)} orphaned packages", remember=False, auto_select=False
+        )
         if not items:
-            self.set_placeholder("No orphaned packages", "Your installed dependencies are all in use.",
-                                 "edit-delete-symbolic")
+            self.set_placeholder(
+                "No orphaned packages",
+                "Your installed dependencies are all in use.",
+                "edit-delete-symbolic",
+            )
         app.set_status(f"{len(items)} orphaned packages detected.")
 
     def _remove(self, all_orphans: bool) -> None:

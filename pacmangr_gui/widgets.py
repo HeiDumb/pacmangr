@@ -1,20 +1,21 @@
 """Reusable GTK widgets and informational dialogs."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import threading
 import urllib.request
+from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk
 
-from .core_loader import CORE  # noqa: E402
-
+from .core_loader import CORE
 
 SOURCE_PACKAGE_ICON = "package-x-generic-symbolic"
 ICON_CACHE = Path.home() / ".cache/pacmangr/icons"
@@ -43,9 +44,7 @@ def package_icon_name(item) -> str:
 def load_source_icon(image: Gtk.Image, item) -> None:
     """Load a source-provided icon without blocking the GTK event loop."""
     url = str(
-        getattr(item, "icon_url", "")
-        or getattr(item, "github_avatar_url", "")
-        or ""
+        getattr(item, "icon_url", "") or getattr(item, "github_avatar_url", "") or ""
     ).strip()
     if not url.startswith("https://"):
         return
@@ -66,11 +65,17 @@ def load_source_icon(image: Gtk.Image, item) -> None:
 
     def worker() -> None:
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "Pacmangr-GUI"})
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "Pacmangr-GUI"}
+            )
             with urllib.request.urlopen(request, timeout=8) as response:
                 content_type = response.headers.get_content_type()
                 data = response.read(1_000_001)
-            if not content_type.startswith("image/") or not data or len(data) > 1_000_000:
+            if (
+                not content_type.startswith("image/")
+                or not data
+                or len(data) > 1_000_000
+            ):
                 return
             ICON_CACHE.mkdir(parents=True, exist_ok=True)
             temporary = cache_path.with_suffix(".tmp")
@@ -86,7 +91,10 @@ def load_source_icon(image: Gtk.Image, item) -> None:
 def cache_summary(cache) -> str:
     if not cache.path.exists():
         return f"Cache is empty.\n\n{cache.path}"
-    lines = [f"Location\n{cache.path}", f"Size\n{CORE.human_size(cache.path.stat().st_size)}"]
+    lines = [
+        f"Location\n{cache.path}",
+        f"Size\n{CORE.human_size(cache.path.stat().st_size)}",
+    ]
     try:
         with cache.connect() as conn:
             labels = (
@@ -122,7 +130,9 @@ class PackageRow(Gtk.ListBoxRow):
         load_source_icon(icon, item)
         box.append(icon)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2 if compact else 4)
+        content = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=2 if compact else 4
+        )
         content.set_hexpand(True)
 
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
