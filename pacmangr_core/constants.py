@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-import shutil
+import shutil  # noqa: F401
 from pathlib import Path
 
 APP_NAME = "pacmangr"
@@ -53,7 +53,9 @@ CACHE_TTL_SECONDS = {
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 PKG_HEADER_RE = re.compile(r"^([^\s/]+)/([^\s]+)\s+([^\s]+)(.*)$")
-CARGO_SEARCH_RE = re.compile(r"^([A-Za-z0-9_.+@/-]+)\s+=\s+\"([^\"]+)\"(?:\s+#\s*(.*))?$")
+CARGO_SEARCH_RE = re.compile(
+    r"^([A-Za-z0-9_.+@/-]+)\s+=\s+\"([^\"]+)\"(?:\s+#\s*(.*))?$"
+)
 PIP_INDEX_RE = re.compile(r"^([A-Za-z0-9_.+-]+)\s+\(([^)]+)\)")
 PERCENT_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
 SPEED_RE = re.compile(r"(\d+(?:\.\d+)?\s*(?:[KMGT]?i?B|[kMGT]?B|B)/s)", re.IGNORECASE)
