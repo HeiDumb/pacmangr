@@ -6,7 +6,10 @@ import shutil
 from pathlib import Path
 
 from . import constants
-from .models import Tools
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import Tools
 
 
 def detect_extra_managers() -> dict[str, str]:
