@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from io import BytesIO
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import tarfile
@@ -15,7 +12,9 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path, PurePosixPath
 
 OWNER = "HeiDumb"
 REPOSITORY = "pacmangr"
@@ -47,9 +46,8 @@ def _request(url: str, timeout: float = 20) -> bytes:
 def _managed_source_path(path: str) -> bool:
     if path in {"pacmangr", "pacmangr-gui"}:
         return True
-    return (
-        path.endswith(".py")
-        and (path.startswith("pacmangr_core/") or path.startswith("pacmangr_gui/"))
+    return path.endswith(".py") and (
+        path.startswith("pacmangr_core/") or path.startswith("pacmangr_gui/")
     )
 
 
@@ -110,7 +108,11 @@ def _update_source_checkout(root: Path, commit: str) -> UpdateResult:
         f"git@github.com:{OWNER}/{REPOSITORY}".lower(),
         f"ssh://git@github.com/{OWNER}/{REPOSITORY}".lower(),
     }:
-        return UpdateResult("unsupported", commit, "This source checkout is not linked to the official GitHub repository.")
+        return UpdateResult(
+            "unsupported",
+            commit,
+            "This source checkout is not linked to the official GitHub repository.",
+        )
 
     state = subprocess.run(
         ["git", "-C", str(root), "status", "--porcelain"],
@@ -120,9 +122,17 @@ def _update_source_checkout(root: Path, commit: str) -> UpdateResult:
         check=False,
     )
     if state.returncode:
-        return UpdateResult("error", commit, state.stderr.strip() or "Could not inspect this source checkout.")
+        return UpdateResult(
+            "error",
+            commit,
+            state.stderr.strip() or "Could not inspect this source checkout.",
+        )
     if state.stdout.strip():
-        return UpdateResult("local_changes", commit, "Local source changes are present, so Pacmangr left this checkout untouched.")
+        return UpdateResult(
+            "local_changes",
+            commit,
+            "Local source changes are present, so Pacmangr left this checkout untouched.",
+        )
 
     current = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -142,17 +152,28 @@ def _update_source_checkout(root: Path, commit: str) -> UpdateResult:
         check=False,
     )
     if pulled.returncode:
-        return UpdateResult("error", commit, pulled.stderr.strip() or "Git could not fast-forward the checkout.")
+        return UpdateResult(
+            "error",
+            commit,
+            pulled.stderr.strip() or "Git could not fast-forward the checkout.",
+        )
     return UpdateResult("updated", commit)
 
 
-def _extract_managed_files(archive: bytes, destination: Path, expected: set[str]) -> None:
+def _extract_managed_files(
+    archive: bytes, destination: Path, expected: set[str]
+) -> None:
     if len(archive) > MAX_ARCHIVE_SIZE:
         raise ValueError("GitHub's update archive is unexpectedly large.")
     with tarfile.open(fileobj=BytesIO(archive), mode="r:gz") as bundle:
         for member in bundle.getmembers():
             parts = PurePosixPath(member.name).parts
-            if len(parts) < 2 or member.issym() or member.islnk() or not member.isfile():
+            if (
+                len(parts) < 2
+                or member.issym()
+                or member.islnk()
+                or not member.isfile()
+            ):
                 continue
             relative = PurePosixPath(*parts[1:]).as_posix()
             if relative not in expected or not _managed_source_path(relative):
@@ -174,7 +195,9 @@ def _extract_managed_files(archive: bytes, destination: Path, expected: set[str]
         if path.is_file()
     )
     if missing:
-        raise ValueError(f"GitHub's archive is missing {len(missing)} application files.")
+        raise ValueError(
+            f"GitHub's archive is missing {len(missing)} application files."
+        )
 
 
 def _replace_installation(root: Path, staged: Path) -> None:
@@ -225,12 +248,16 @@ def check_and_apply_update() -> UpdateResult:
         commit_data = json.loads(commit_payload.decode("utf-8"))
         commit = str(commit_data.get("sha", ""))
         if not commit:
-            return UpdateResult("error", detail="GitHub did not return the latest commit ID.")
+            return UpdateResult(
+                "error", detail="GitHub did not return the latest commit ID."
+            )
 
         if (root / ".git").exists():
             return _update_source_checkout(root, commit)
 
-        tree_payload = _request(f"{API_ROOT}/git/trees/{urllib.parse.quote(commit, safe='')}?recursive=1")
+        tree_payload = _request(
+            f"{API_ROOT}/git/trees/{urllib.parse.quote(commit, safe='')}?recursive=1"
+        )
         tree_data = json.loads(tree_payload.decode("utf-8"))
         remote_files = {
             str(entry["path"]): str(entry["sha"])
@@ -241,15 +268,25 @@ def check_and_apply_update() -> UpdateResult:
         }
         expected = set(remote_files)
         if not expected or "pacmangr_gui/self_update.py" not in expected:
-            return UpdateResult("error", commit, "GitHub's source tree did not contain the Pacmangr application files.")
+            return UpdateResult(
+                "error",
+                commit,
+                "GitHub's source tree did not contain the Pacmangr application files.",
+            )
         if not _local_source_is_outdated(root, remote_files):
             return UpdateResult("current", commit)
 
-        archive = _request(f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/tarball/{commit}")
+        archive = _request(
+            f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/tarball/{commit}"
+        )
         if len(archive) > MAX_ARCHIVE_SIZE:
-            return UpdateResult("error", commit, "GitHub's update archive is unexpectedly large.")
+            return UpdateResult(
+                "error", commit, "GitHub's update archive is unexpectedly large."
+            )
 
-        with tempfile.TemporaryDirectory(prefix=".pacmangr-update-", dir=root) as temp_name:
+        with tempfile.TemporaryDirectory(
+            prefix=".pacmangr-update-", dir=root
+        ) as temp_name:
             temporary = Path(temp_name)
             staged = temporary / "staged"
             staged.mkdir()
@@ -258,9 +295,22 @@ def check_and_apply_update() -> UpdateResult:
         return UpdateResult("updated", commit)
     except urllib.error.HTTPError as exc:
         if exc.code in {403, 429}:
-            return UpdateResult("error", detail="GitHub's API rate limit was reached. Try again later.")
-        return UpdateResult("error", detail=f"GitHub returned HTTP {exc.code} while checking for updates.")
+            return UpdateResult(
+                "error", detail="GitHub's API rate limit was reached. Try again later."
+            )
+        return UpdateResult(
+            "error",
+            detail=f"GitHub returned HTTP {exc.code} while checking for updates.",
+        )
     except urllib.error.URLError as exc:
-        return UpdateResult("error", detail=f"Could not reach GitHub: {getattr(exc, 'reason', exc)}")
-    except (OSError, ValueError, TypeError, tarfile.TarError, subprocess.SubprocessError) as exc:
+        return UpdateResult(
+            "error", detail=f"Could not reach GitHub: {getattr(exc, 'reason', exc)}"
+        )
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        tarfile.TarError,
+        subprocess.SubprocessError,
+    ) as exc:
         return UpdateResult("error", detail=str(exc))
