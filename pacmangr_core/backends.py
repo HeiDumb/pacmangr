@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import platform
@@ -13,7 +12,6 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from html.parser import HTMLParser
 from pathlib import Path
 
 from . import constants
@@ -26,56 +24,13 @@ from .parsers import (
     parse_pacman_installed,
     parse_snap_installed,
 )
-from .utils import human_size, run_capture
+from .utils import human_size, plain_text_html, run_capture
 
 
 APPIMAGE_FEED_URL = "https://appimage.github.io/feed.json"
 APPIMAGE_REGISTRY_PATH = constants.APPIMAGE_REGISTRY_PATH
 _appimage_feed_lock = threading.Lock()
 _appimage_feed_cache: tuple[float, list[dict]] = (float("-inf"), [])
-
-
-class _DescriptionHTMLParser(HTMLParser):
-    _BLOCK_TAGS = {
-        "br",
-        "div",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "li",
-        "ol",
-        "p",
-        "ul",
-    }
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
-        if tag in self._BLOCK_TAGS:
-            self.parts.append("\n")
-            if tag == "li":
-                self.parts.append("• ")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self._BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-
-def _plain_text_description(value: object) -> str:
-    """Convert catalog HTML descriptions into readable plain text."""
-    parser = _DescriptionHTMLParser()
-    parser.feed(html.unescape(str(value or "")))
-    parser.close()
-    lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
-    return "\n".join(line for line in lines if line)
 
 
 def _curated_appimage_items(query: str, installed: dict) -> list[PackageItem]:
@@ -206,7 +161,7 @@ def search_appimage_catalog(query: str) -> list[PackageItem]:
         name = str(entry.get("name") or "").strip()
         if not name:
             continue
-        description = _plain_text_description(entry.get("description"))
+        description = plain_text_html(entry.get("description"))
         categories = entry.get("categories") or []
         category_text = " ".join(str(category) for category in categories)
         if needle not in f"{name} {description} {category_text}".casefold():

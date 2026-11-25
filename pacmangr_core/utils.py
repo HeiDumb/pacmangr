@@ -2,10 +2,55 @@
 
 from __future__ import annotations
 
+import html
 import os
 import subprocess
+from html.parser import HTMLParser
 
 from .constants import ANSI_RE
+
+
+class _HTMLTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "br",
+        "div",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "li",
+        "ol",
+        "p",
+        "ul",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+            if tag == "li":
+                self.parts.append("• ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def plain_text_html(value: object) -> str:
+    """Convert HTML markup to readable text while preserving block breaks."""
+    parser = _HTMLTextParser()
+    parser.feed(html.unescape(str(value or "")))
+    parser.close()
+    lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def strip_ansi(text: str) -> str:

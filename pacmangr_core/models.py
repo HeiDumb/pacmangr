@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import constants
 from .commands import detect_extra_managers, manager_spec_command
+from .utils import plain_text_html
 
 
 @dataclass
@@ -328,13 +329,17 @@ def package_to_dict(item: PackageItem) -> dict[str, object]:
 
 
 def package_from_dict(data: dict[str, object]) -> PackageItem:
+    source = str(data.get("source") or "")
+    description = str(data.get("description") or "")
+    if source == "appimage":
+        description = plain_text_html(description)
     return PackageItem(
-        source=str(data.get("source") or ""),
+        source=source,
         manager=str(data.get("manager") or ""),
         name=str(data.get("name") or ""),
         package_id=str(data.get("package_id") or data.get("name") or ""),
         version=str(data.get("version") or ""),
-        description=str(data.get("description") or ""),
+        description=description,
         repo=str(data.get("repo") or ""),
         installed=bool(data.get("installed")),
         origin=str(data.get("origin") or ""),
