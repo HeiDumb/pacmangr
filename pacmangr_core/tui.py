@@ -10,7 +10,6 @@ import pty
 import queue
 import shlex
 import subprocess
-import stat
 import textwrap
 import threading
 import time
@@ -26,6 +25,7 @@ from .backends import (
     is_git_url,
 )
 from .cache import PackageCache
+from .appimages import launch_arguments, make_executable
 from .commands import manager_spec_command, system_update_commands
 from .models import DownloadJob, PackageItem, PackageVersion, Tools, package_key
 from .parsers import (
@@ -1348,11 +1348,9 @@ class PkgUI:
             self.status = f"AppImage file not found for {item.title()}."
             return
         try:
-            mode = path.stat().st_mode
-            if not mode & 0o111:
-                path.chmod(stat.S_IMODE(mode) | 0o111)
+            path = make_executable(path)
             subprocess.Popen(
-                [str(path)],
+                launch_arguments(path),
                 cwd=str(path.parent),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

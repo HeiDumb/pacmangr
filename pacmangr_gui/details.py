@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import shutil
-import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -17,6 +16,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from .core_loader import CORE
+from pacmangr_core.appimages import launch_arguments, make_executable
 from .operations import fetch_github_files, fetch_github_readme, github_repo_slug
 from .widgets import EmptyState
 
@@ -625,11 +625,9 @@ class DetailsPane(Gtk.Box):
             self.app.set_status(f"The AppImage file for {item.title()} could not be found.")
             return
         try:
-            mode = path.stat().st_mode
-            if not mode & 0o111:
-                path.chmod(stat.S_IMODE(mode) | 0o111)
+            path = make_executable(path)
             subprocess.Popen(
-                [str(path)],
+                launch_arguments(path),
                 cwd=str(path.parent),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
