@@ -139,6 +139,17 @@ class PackageCache:
         except sqlite3.Error:
             return
 
+    def invalidate_search(self, query: str) -> None:
+        """Discard cached search results after package state changes."""
+        normalized = query.strip().lower()
+        if not normalized:
+            return
+        try:
+            with self.connect() as conn:
+                conn.execute("DELETE FROM search_cache WHERE query = ?", (normalized,))
+        except sqlite3.Error:
+            return
+
     def load_versions(self, manager: str, package_id: str) -> list[PackageVersion]:
         package_id = package_id.strip()
         if not package_id:

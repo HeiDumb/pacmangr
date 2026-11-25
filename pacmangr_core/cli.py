@@ -19,9 +19,11 @@ import urllib.request
 from pathlib import Path
 
 from . import constants
+from .appimages import integrate_appimage, remove_appimage_integration
 from .backends import (
     _appimage_key,
     _appimage_registry,
+    appimage_roots,
     collect_installed_packages,
     git_package,
     is_git_url,
@@ -389,7 +391,54 @@ def run_appimage_install(key: str, name: str, source_url: str) -> int:
                 pass
         print(f"AppImage installation failed: {exc}", file=sys.stderr)
         return 1
+    try:
+        integrate_appimage(target, name)
+    except OSError as exc:
+        print(f"Warning: could not add {name} to the app menu: {exc}", file=sys.stderr)
     print(f"Installed {name} from {filename}: {target}", flush=True)
+    return 0
+
+
+def run_appimage_remove(path_value: str) -> int:
+    """Remove an AppImage and its Pacmangr desktop integration."""
+    path = Path(path_value).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_file() or resolved.suffix.casefold() != ".appimage":
+            raise ValueError("The selected file is not an AppImage.")
+        if not any(
+            resolved.is_relative_to(root.expanduser().resolve())
+            for root in appimage_roots()
+            if root.exists()
+        ):
+            raise ValueError("Refusing to remove an AppImage outside known locations.")
+        resolved.unlink()
+    except (OSError, ValueError) as exc:
+        print(f"AppImage removal failed: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        remove_appimage_integration(resolved)
+    except OSError as exc:
+        print(f"Warning: could not remove the app-menu entry: {exc}", file=sys.stderr)
+    try:
+        registry = _appimage_registry()
+        changed = False
+        for key, record in list(registry.items()):
+            if not isinstance(record, dict):
+                continue
+            registered_path = str(record.get("path") or "")
+            if registered_path and Path(registered_path).expanduser().resolve() == resolved:
+                del registry[key]
+                changed = True
+        if changed:
+            constants.APPIMAGE_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary = constants.APPIMAGE_REGISTRY_PATH.with_suffix(".tmp")
+            temporary.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+            temporary.replace(constants.APPIMAGE_REGISTRY_PATH)
+    except OSError as exc:
+        print(f"Warning: could not update the AppImage registry: {exc}", file=sys.stderr)
+    print(f"Removed AppImage: {resolved}", flush=True)
     return 0
 
 
@@ -435,6 +484,10 @@ def run_cli(argv: list[str] | None = None) -> None:
                 if len(argv) != 5:
                     raise SystemExit(2)
                 raise SystemExit(run_appimage_install(argv[2], argv[3], argv[4]))
+            if argv[1] == "_appimage-remove":
+                if len(argv) != 3:
+                    raise SystemExit(2)
+                raise SystemExit(run_appimage_remove(argv[2]))
             if argv[1] in {"-V", "--version"}:
                 print(f"{constants.APP_NAME} {constants.VERSION}")
                 raise SystemExit(0)

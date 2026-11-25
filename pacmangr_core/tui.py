@@ -25,7 +25,12 @@ from .backends import (
     is_git_url,
 )
 from .cache import PackageCache
-from .appimages import launch_arguments, make_executable
+from .appimages import (
+    integrate_appimage,
+    launch_arguments,
+    launch_environment,
+    make_executable,
+)
 from .commands import manager_spec_command, system_update_commands
 from .models import DownloadJob, PackageItem, PackageVersion, Tools, package_key
 from .parsers import (
@@ -1349,18 +1354,28 @@ class PkgUI:
             return
         try:
             path = make_executable(path)
+            try:
+                integrate_appimage(path, item.title())
+                integration_error = ""
+            except OSError as exc:
+                integration_error = str(exc)
             subprocess.Popen(
                 launch_arguments(path),
                 cwd=str(path.parent),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=launch_environment(),
                 start_new_session=True,
             )
         except OSError as exc:
             self.status = f"Could not run {item.title()}: {exc}"
             return
-        self.status = f"Launched {item.title()}."
+        self.status = (
+            f"Launched and integrated {item.title()}."
+            if not integration_error
+            else f"Launched {item.title()}, but menu integration failed: {integration_error}"
+        )
 
     def log_appimage_info(self, item: PackageItem) -> None:
         self.log(f"AppImage: {item.name}")

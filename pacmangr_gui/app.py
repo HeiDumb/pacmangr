@@ -1507,21 +1507,92 @@ class PacmangrGUI(Gtk.Application):
 
         start_thread(worker)
 
+    def _refresh_browse_after_operation(
+        self, action: str, item, removed_appimage_path: str = ""
+    ) -> None:
+        def normalized_path(value: str) -> str:
+            try:
+                return str(Path(value).expanduser().resolve())
+            except OSError:
+                return str(Path(value).expanduser())
+
+        if self.browse_query:
+            self.cache.invalidate_search(self.browse_query)
+
+        if action == "remove" and item.source == "appimage" and removed_appimage_path:
+            removed_path = normalized_path(removed_appimage_path)
+            retained = []
+            for candidate in self.browse_items:
+                candidate_path = getattr(candidate, "local_path", "")
+                if candidate.source == "appimage" and candidate_path:
+                    same_path = normalized_path(candidate_path) == removed_path
+                    if same_path:
+                        candidate.installed = False
+                        del candidate.local_path
+                local_file = (
+                    candidate.source == "appimage"
+                    and candidate.repo == "local file"
+                    and normalized_path(candidate.package_id) == removed_path
+                )
+                if not local_file:
+                    retained.append(candidate)
+            self.browse_items = retained
+
+        if self.view_mode != "browse" or not self.browse_query:
+            return
+        self.show_items(
+            self.browse_items,
+            f"Results for “{self.browse_query}”",
+            remember=False,
+            auto_select=False,
+        )
+
+        selected = item if item in self.browse_items else None
+        if selected is None and action == "remove" and item.source == "appimage":
+            item_name = item.name.casefold()
+            selected = next(
+                (
+                    candidate
+                    for candidate in self.browse_items
+                    if candidate.source == "appimage"
+                    and candidate.origin
+                    and (
+                        candidate.name.casefold() in item_name
+                        or item_name in candidate.name.casefold()
+                    )
+                ),
+                None,
+            )
+        if selected is not None:
+            list_box = self.views["browse"].result_list.list_box
+            row = list_box.get_first_child()
+            while row is not None:
+                if getattr(row, "item", None) is selected:
+                    list_box.select_row(row)
+                    break
+                row = row.get_next_sibling()
+
     def finish_operation(
         self, action: str, item, code: int, output: str, cancelled: bool = False
     ) -> bool:
         self._end_operation()
         text = output.strip() or f"The package manager exited with status {code}."
         self.set_detail_text(text)
+        refresh_installed = False
+        removed_appimage_path = ""
+        if item.source == "appimage":
+            removed_appimage_path = getattr(item, "local_path", "")
+            if not removed_appimage_path and item.package_id.startswith("/"):
+                removed_appimage_path = item.package_id
         if cancelled:
             self.set_status(f"{action.title()} cancelled.")
-            if self.installed_loaded:
-                self.load_installed(force=True)
+            refresh_installed = action == "remove" or self.installed_loaded
         elif code == 0:
             item.installed = action == "install"
             self.set_status(f"{action.title()} completed for {item.title()}.")
-            if self.installed_loaded:
-                self.load_installed(force=True)
+            refresh_installed = True
+        elif action == "remove":
+            refresh_installed = True
         elif code in {126, 127} and "pkexec" in text:
             self.set_status(
                 "Graphical authentication is unavailable; package operation stopped."
@@ -1540,9 +1611,10 @@ class PacmangrGUI(Gtk.Application):
                             item.installed = True
                             break
             if item.source == "appimage" and action == "remove":
-                item.installed = False
-                if hasattr(item, "local_path"):
-                    del item.local_path
+                if code == 0 or not Path(removed_appimage_path).is_file():
+                    item.installed = False
+                    if hasattr(item, "local_path"):
+                        del item.local_path
             if item.source == "appimage":
                 self.details.show(item)
                 self.set_detail_text(text)
@@ -1575,6 +1647,24 @@ class PacmangrGUI(Gtk.Application):
                 )
             )
             self.details.files_button.set_sensitive(bool(item.installed))
+
+        if code == 0 or cancelled or action == "remove":
+            removed_path = (
+                removed_appimage_path
+                if removed_appimage_path
+                and not Path(removed_appimage_path).is_file()
+                else ""
+            )
+            self._refresh_browse_after_operation(action, item, removed_path)
+
+        if refresh_installed:
+            def refresh_browse_after_inventory(success: bool) -> None:
+                if success and self.view_mode == "browse" and self.browse_query:
+                    self.views["browse"].on_search()
+
+            self.views["installed"].load_installed(
+                force=True, on_complete=refresh_browse_after_inventory
+            )
         return False
 
     def on_open_tui(self, _button=None) -> None:

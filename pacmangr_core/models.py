@@ -196,8 +196,12 @@ class PackageItem:
                 path = self.package_id
             if not path:
                 return None
-            rm = shutil.which("rm") or "/usr/bin/rm"
-            return [rm, "-v", path]
+            return [
+                sys.executable,
+                str(constants.CLI_ENTRY_PATH),
+                "_appimage-remove",
+                path,
+            ]
         generic = manager_spec_command(
             self.source, "remove", tools, package=self.package_id
         )

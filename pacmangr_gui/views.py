@@ -452,11 +452,12 @@ class InstalledView(BaseView):
             )
             app.set_status(f"{len(filtered)} installed packages matching filter.")
 
-    def load_installed(self, force: bool = False) -> None:
+    def load_installed(self, force: bool = False, on_complete=None) -> None:
         app = self.app
         show_progress = app.view_mode == "installed"
         self._load_serial += 1
-        busy_token = f"installed-load:{self._load_serial}" if show_progress else ""
+        load_serial = self._load_serial
+        busy_token = f"installed-load:{load_serial}" if show_progress else ""
         if show_progress:
             app.begin_busy(busy_token)
             app.set_status("Scanning installed packages…")
@@ -494,6 +495,8 @@ class InstalledView(BaseView):
                     "",
                     show_progress,
                     busy_token,
+                    load_serial,
+                    on_complete,
                 )
             except Exception as exc:
                 GLib.idle_add(
@@ -505,6 +508,8 @@ class InstalledView(BaseView):
                     str(exc),
                     show_progress,
                     busy_token,
+                    load_serial,
+                    on_complete,
                 )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -523,23 +528,34 @@ class InstalledView(BaseView):
         error: str,
         show_progress: bool = False,
         busy_token: str = "",
+        load_serial: int = 0,
+        on_complete=None,
     ) -> bool:
         app = self.app
         if busy_token:
             app.end_busy(busy_token)
+        if load_serial and load_serial != self._load_serial:
+            return False
         if error:
             if show_progress and app.view_mode == "installed":
                 app.set_status(f"Installed packages scan failed: {error}")
+            if on_complete:
+                on_complete(False)
             return False
         app.explicit_set = explicit
         app.deps_set = deps
         app.orphans_set = orphans
         app.all_installed = items
         app.installed_loaded = True
+        search_engine = getattr(app, "_search_engine", None)
+        if search_engine and hasattr(search_engine, "apply_installed_items"):
+            search_engine.apply_installed_items(items)
         app.update_badges()
         self.filter_installed()
         if app.view_mode == "orphans" and hasattr(app.views["orphans"], "refresh"):
             app.views["orphans"].refresh()
+        if on_complete:
+            on_complete(True)
         return False
 
 

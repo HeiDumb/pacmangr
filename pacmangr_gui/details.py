@@ -16,7 +16,12 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from .core_loader import CORE
-from pacmangr_core.appimages import launch_arguments, make_executable
+from pacmangr_core.appimages import (
+    integrate_appimage,
+    launch_arguments,
+    launch_environment,
+    make_executable,
+)
 from .operations import fetch_github_files, fetch_github_readme, github_repo_slug
 from .widgets import EmptyState
 
@@ -626,18 +631,28 @@ class DetailsPane(Gtk.Box):
             return
         try:
             path = make_executable(path)
+            try:
+                integrate_appimage(path, item.title())
+                integration_error = ""
+            except OSError as exc:
+                integration_error = str(exc)
             subprocess.Popen(
                 launch_arguments(path),
                 cwd=str(path.parent),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=launch_environment(),
                 start_new_session=True,
             )
         except OSError as exc:
             self.app.set_status(f"Could not launch {item.title()}: {exc}")
             return
-        self.app.set_status(f"Launched {item.title()}.")
+        self.app.set_status(
+            f"Launched and integrated {item.title()}."
+            if not integration_error
+            else f"Launched {item.title()}, but menu integration failed: {integration_error}"
+        )
 
     def on_open_website(self, *_args) -> None:
         item = self.app.current_item
