@@ -1,6 +1,6 @@
 # Maintainer: HeiDumb <rockygehlot31@gmail.com>
 pkgname=pacmangr
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=2
 pkgdesc="Unified terminal and GTK interface for native package managers"
 arch=('any')
