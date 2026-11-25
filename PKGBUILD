@@ -1,7 +1,7 @@
 # Maintainer: HeiDumb <rockygehlot31@gmail.com>
 pkgname=pacmangr
-pkgver=0.4.1
-pkgrel=2
+pkgver=0.4.2
+pkgrel=1
 pkgdesc="Unified terminal and GTK interface for native package managers"
 arch=('any')
 url="https://github.com/HeiDumb/pacmangr"
@@ -26,7 +26,7 @@ optdepends=(
 )
 
 source=("pacmangr-${pkgver}.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/tags/${pkgver}.tar.gz")
-sha256sums=('392dfc38cb520384ce5951d622bbf000a48ba3238bbc5593387206402f062da6')
+sha256sums=('f676f70ba126e525e2f9f27b4c5b41267449c6edf3a5a6811199876e92834a7b')
 
 package() {
   local srcdir_repo="$srcdir/pacmangr-$pkgver"
