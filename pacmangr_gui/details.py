@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import shutil
+import stat
 import subprocess
 import threading
+from pathlib import Path
 
 import gi
 
@@ -16,6 +18,7 @@ from gi.repository import Gdk, GLib, Gtk, Pango
 
 from .core_loader import CORE
 from .operations import fetch_github_files, fetch_github_readme, github_repo_slug
+from .widgets import EmptyState
 
 
 class DetailsPane(Gtk.Box):
@@ -26,6 +29,8 @@ class DetailsPane(Gtk.Box):
         self.app = app
         self._detail_generation = 0
         self._detail_busy_tokens: set[str] = set()
+        self._overview_cache: dict[tuple, tuple[str, bool]] = {}
+        self._overview_loading_key: tuple | None = None
         self.add_css_class("detail-card")
         self.set_size_request(400, -1)
         self.set_vexpand(True)
@@ -49,6 +54,15 @@ class DetailsPane(Gtk.Box):
         self.status_pill.set_visible(False)
         self.detail_header.append(self.status_pill)
         self.append(self.detail_header)
+
+        self.empty_state = EmptyState(
+            "Select a package",
+            "Choose a package to see its details and actions.",
+            "package-x-generic-symbolic",
+        )
+        self.empty_state.set_hexpand(True)
+        self.empty_state.set_vexpand(True)
+        self.append(self.empty_state)
 
         self.detail_meta = Gtk.Label(label="Package details appear here.", xalign=0)
         self.detail_meta.set_wrap(True)
@@ -95,7 +109,7 @@ class DetailsPane(Gtk.Box):
         actions.set_visible(False)
         self.detail_actions = actions
 
-        # Selecting a row already fetches details; this button re-loads them.
+        # Selecting a row loads details; this button shows the cached overview.
         self.info_button = Gtk.Button(label="Overview")
         self.info_button.add_css_class("tab-btn")
         self.info_button.set_sensitive(False)
@@ -119,6 +133,13 @@ class DetailsPane(Gtk.Box):
         self.copy_button.set_sensitive(False)
         self.copy_button.connect("clicked", self.on_copy_name)
         self.copy_button.set_hexpand(True)
+
+        self.run_button = Gtk.Button(label="Run AppImage")
+        self.run_button.add_css_class("suggested-action")
+        self.run_button.set_sensitive(False)
+        self.run_button.set_visible(False)
+        self.run_button.connect("clicked", self.on_run_appimage)
+        self.run_button.set_hexpand(True)
 
         self.install_button = Gtk.Button(label="Install")
         self.install_button.add_css_class("suggested-action")
@@ -148,6 +169,7 @@ class DetailsPane(Gtk.Box):
             info_row.append(button)
         utility_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         utility_row.append(self.copy_button)
+        utility_row.append(self.run_button)
         utility_row.append(self.website_button)
         operation_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         operation_row.append(self.install_button)
@@ -213,6 +235,9 @@ class DetailsPane(Gtk.Box):
         self.status_pill.set_label("")
         self.status_pill.set_visible(False)
         self.status_pill.remove_css_class("orphan-pill")
+        self.empty_state.set_visible(True)
+        self.detail_header.set_visible(False)
+        self.detail_meta.set_visible(False)
         self.detail_meta.set_text(
             "Package details appear here. Click a package to load its details."
         )
@@ -232,11 +257,15 @@ class DetailsPane(Gtk.Box):
         ):
             button.set_sensitive(False)
         self.versions_button.set_visible(False)
+        self.run_button.set_visible(False)
         self.detail_actions.set_visible(False)
 
     def show(self, item) -> None:
         self._cancel_detail_activity()
         self.detail_header.set_margin_top(16)
+        self.empty_state.set_visible(False)
+        self.detail_header.set_visible(True)
+        self.detail_meta.set_visible(True)
         self.detail_section.set_visible(True)
         self.detail_scroller.set_visible(True)
         self.detail_name.set_text(item.title())
@@ -305,12 +334,22 @@ class DetailsPane(Gtk.Box):
                 "Update checkout" if item.installed else "Clone repository"
             )
         tools = self.app.tools
+        appimage_catalog_item = item.source == "appimage" and bool(item.origin)
         self.install_button.set_sensitive(
-            item.source != "appimage"
-            and (item.source != "git" or bool(getattr(tools, "git", None)))
+            (appimage_catalog_item and (not item.installed or bool(getattr(item, "local_path", ""))))
+            or (
+                item.source != "appimage"
+                and (item.source != "git" or bool(getattr(tools, "git", None)))
+            )
         )
         self.remove_button.set_sensitive(
-            (item.installed or item.source == "appimage") and item.source != "git"
+            item.installed and item.source != "git"
+        )
+        self.run_button.set_visible(item.source == "appimage" and item.installed)
+        self.run_button.set_sensitive(
+            item.source == "appimage"
+            and item.installed
+            and bool(getattr(item, "local_path", "") or item.package_id.startswith("/"))
         )
 
     def set_loading(self, item) -> None:
@@ -318,6 +357,7 @@ class DetailsPane(Gtk.Box):
 
     def _cancel_detail_activity(self) -> None:
         self._detail_generation += 1
+        self._overview_loading_key = None
         for token in tuple(self._detail_busy_tokens):
             self.app.end_busy(token)
         self._detail_busy_tokens.clear()
@@ -351,8 +391,23 @@ class DetailsPane(Gtk.Box):
         item = self.app.current_item
         if not item:
             return
+        key = (item.source, item.package_id, item.origin)
+        cached = self._overview_cache.get(key)
+        if cached:
+            text, is_readme = cached
+            if is_readme:
+                self.set_readme(text)
+            else:
+                self.set_text(text)
+            return
+        if self._overview_loading_key == key:
+            return
         if self._is_github_item(item):
             self._load_readme(item)
+            return
+        if item.source == "appimage":
+            self.set_text(item.description or "No details are available.")
+            self.app.set_status(f"Overview shown for {item.title()}.")
             return
         installed_view = self.app.view_mode in {"installed", "orphans"} or bool(
             item.installed
@@ -364,6 +419,7 @@ class DetailsPane(Gtk.Box):
             return
         self.set_loading(item)
         generation = self._begin_detail_activity(f"Loading details for {item.title()}…")
+        self._overview_loading_key = key
 
         def worker() -> None:
             try:
@@ -378,8 +434,14 @@ class DetailsPane(Gtk.Box):
         slug = github_repo_slug(item) or getattr(
             item, "github_full_name", "this repository"
         )
+        key = (item.source, item.package_id, item.origin)
+        cached = self._overview_cache.get(key)
+        if cached and cached[1]:
+            self.set_readme(cached[0])
+            return
         self.set_text(f"Loading README.md for {slug}…")
         generation = self._begin_detail_activity(f"Loading README.md for {slug}…")
+        self._overview_loading_key = key
 
         def worker() -> None:
             try:
@@ -398,11 +460,13 @@ class DetailsPane(Gtk.Box):
         self._end_detail_activity(generation)
         if generation != self._detail_generation or self.app.current_item is not item:
             return False
+        self._overview_loading_key = None
         if error:
             self.set_text(error)
             self.app.set_status(error)
             return False
         self.set_readme(text)
+        self._overview_cache[(item.source, item.package_id, item.origin)] = (text, True)
         self.app.set_status(f"Loaded README.md for {slug}")
         return False
 
@@ -414,8 +478,14 @@ class DetailsPane(Gtk.Box):
         self._end_detail_activity(generation)
         if generation != self._detail_generation or self.app.current_item is not item:
             return False
+        self._overview_loading_key = None
         text = output.strip() or "No details are available."
         self.set_text(text)
+        if code == 0:
+            self._overview_cache[(item.source, item.package_id, item.origin)] = (
+                text,
+                False,
+            )
         self.app.set_status(
             f"Loaded details for {item.title()}."
             if code == 0
@@ -541,7 +611,35 @@ class DetailsPane(Gtk.Box):
         display = Gdk.Display.get_default()
         if display:
             display.get_clipboard().set(name)
-            self.app.set_status(f"Copied '{name}' to clipboard.")
+            self.app.set_status(f"Copied '{name}' to clipboard.", duration_ms=2200)
+
+    def on_run_appimage(self, *_args) -> None:
+        item = self.app.current_item
+        if not item or item.source != "appimage":
+            return
+        path_value = getattr(item, "local_path", "")
+        if not path_value and item.package_id.startswith("/"):
+            path_value = item.package_id
+        path = Path(path_value).expanduser() if path_value else None
+        if path is None or not path.is_file():
+            self.app.set_status(f"The AppImage file for {item.title()} could not be found.")
+            return
+        try:
+            mode = path.stat().st_mode
+            if not mode & 0o111:
+                path.chmod(stat.S_IMODE(mode) | 0o111)
+            subprocess.Popen(
+                [str(path)],
+                cwd=str(path.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self.app.set_status(f"Could not launch {item.title()}: {exc}")
+            return
+        self.app.set_status(f"Launched {item.title()}.")
 
     def on_open_website(self, *_args) -> None:
         item = self.app.current_item

@@ -2,6 +2,7 @@
 
 import importlib.machinery
 import importlib.util
+import json
 import math
 import os
 import shutil
@@ -9,9 +10,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "pacmangr-gui"
@@ -101,6 +102,146 @@ class GuiOperationCommandTests(unittest.TestCase):
         self.assertIn(("System packages", "pacman"), choices)
         self.assertIn(("Nix", "nix"), choices)
         self.assertIn(("Git repository", "git"), choices)
+
+    def test_source_choices_include_appimage_catalog(self):
+        tools = SimpleNamespace(
+            pacman=None,
+            yay=None,
+            paru=None,
+            flatpak=None,
+            apt=None,
+            apt_cache=None,
+            snap=None,
+            git=None,
+            extra_managers={},
+        )
+        self.assertIn(("AppImages", "appimage"), GUI.source_choices(tools))
+
+    def test_check_updates_on_launch_defaults_on_and_persists(self):
+        from pacmangr_gui.settings import SettingsManager
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            settings = SettingsManager(path)
+            self.assertTrue(settings.get("check_updates_on_launch"))
+            settings.set("check_updates_on_launch", False)
+            self.assertFalse(SettingsManager(path).get("check_updates_on_launch"))
+
+    def test_appimage_catalog_search_builds_installable_items(self):
+        from pacmangr_core import backends
+
+        feed = [
+            {
+                "name": "Demo Editor",
+                "description": "A demo editor",
+                "categories": ["Utility"],
+                "links": [
+                    {"type": "GitHub", "url": "demo/editor"},
+                    {"type": "Download", "url": "https://github.com/demo/editor/releases"},
+                ],
+                "icons": ["Demo_Editor/icons/demo.png"],
+            }
+        ]
+        with (
+            patch.object(backends, "_load_appimage_feed", return_value=feed),
+            patch.object(backends, "_appimage_registry", return_value={}),
+        ):
+            items = backends.search_appimage_catalog("demo")
+
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(item.name, "Demo Editor")
+        self.assertEqual(item.origin, "https://github.com/demo/editor/releases")
+        self.assertEqual(item.catalog_key, "demo-editor")
+        self.assertIn("appimage.github.io/database/", item.icon_url)
+        command = item.install_command(SimpleNamespace())
+        self.assertEqual(
+            command[-4:],
+            ["_appimage-install", "demo-editor", "Demo Editor", item.origin],
+        )
+
+    def test_appimage_feed_cold_cache_fetches_catalog(self):
+        from pacmangr_core import backends
+
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps({"items": [{"name": "Demo"}]}).encode()
+        with (
+            patch.object(backends, "_appimage_feed_cache", (float("-inf"), [])),
+            patch.object(backends.urllib.request, "urlopen", return_value=response) as fetch,
+        ):
+            entries = backends._load_appimage_feed()
+
+        self.assertEqual(entries, [{"name": "Demo"}])
+        fetch.assert_called_once()
+
+    def test_official_beeper_and_curseforge_search_without_feed_fetch(self):
+        from pacmangr_core import backends
+
+        with (
+            patch.object(backends, "platform") as platform,
+            patch.object(backends, "_appimage_registry", return_value={}),
+            patch.object(
+                backends,
+                "_load_appimage_feed",
+                side_effect=AssertionError("popular app search should be immediate"),
+            ),
+        ):
+            platform.machine.return_value = "x86_64"
+            beeper = backends.search_appimage_catalog("Beeper")
+            curseforge = backends.search_appimage_catalog("curse forge")
+
+        self.assertEqual([item.name for item in beeper], ["Beeper"])
+        self.assertEqual(
+            beeper[0].origin,
+            "https://api.beeper.com/desktop/download/linux/"
+            "x64/stable/com.automattic.beeper.desktop",
+        )
+        self.assertEqual([item.name for item in curseforge], ["CurseForge"])
+        self.assertTrue(curseforge[0].origin.endswith("curseforge-latest-linux.AppImage"))
+
+    def test_beeper_download_resolver_accepts_official_release_endpoint(self):
+        from pacmangr_core import cli
+
+        source_url = (
+            "https://api.beeper.com/desktop/download/linux/arm64/stable/"
+            "com.automattic.beeper.desktop"
+        )
+        self.assertEqual(
+            cli._appimage_release_asset(source_url),
+            (source_url, "Beeper.AppImage"),
+        )
+
+    def test_appimage_release_resolver_prefers_native_architecture(self):
+        from pacmangr_core import cli
+
+        payload = {
+            "assets": [
+                {
+                    "name": "Demo-aarch64.AppImage",
+                    "browser_download_url": "https://example.test/arm.AppImage",
+                },
+                {
+                    "name": "Demo-x86_64.AppImage",
+                    "browser_download_url": "https://example.test/x64.AppImage",
+                },
+            ]
+        }
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = json.dumps(payload).encode()
+        with (
+            patch.object(cli.platform, "machine", return_value="x86_64"),
+            patch.object(cli.urllib.request, "urlopen", return_value=response),
+        ):
+            url, filename = cli._appimage_release_asset(
+                "https://github.com/demo/editor/releases"
+            )
+
+        self.assertEqual(url, "https://example.test/x64.AppImage")
+        self.assertEqual(filename, "Demo-x86_64.AppImage")
 
     def test_cli_operation_parser_supports_source_yes_and_dry_run(self):
         self.assertEqual(

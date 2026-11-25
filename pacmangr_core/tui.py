@@ -10,6 +10,7 @@ import pty
 import queue
 import shlex
 import subprocess
+import stat
 import textwrap
 import threading
 import time
@@ -20,6 +21,7 @@ from . import constants
 from .backends import (
     collect_installed_packages,
     find_appimages,
+    search_appimage_catalog,
     git_package,
     is_git_url,
 )
@@ -485,6 +487,14 @@ class PkgUI:
 
             return run
 
+        def appimage_job() -> tuple[str, list[PackageItem], bool, str]:
+            local = find_appimages(query)
+            try:
+                catalog = search_appimage_catalog(query)
+            except Exception as exc:  # Keep local AppImages searchable offline.
+                return "appimage", local, True, f"AppImage catalog unavailable: {exc}"
+            return "appimage", local + catalog, True, ""
+
         if backend in ("all", "pacman") and self.tools.pacman:
             jobs.append(
                 (
@@ -581,12 +591,7 @@ class PkgUI:
             )
 
         if backend in ("all", "appimage"):
-            jobs.append(
-                (
-                    "appimage",
-                    lambda: ("appimage", find_appimages(query), True, ""),
-                )
-            )
+            jobs.append(("appimage", appimage_job))
 
         if backend == "all" or backend in self.tools.extra_managers:
             for manager in self.tools.extra_managers:
@@ -805,9 +810,6 @@ class PkgUI:
         skipped: list[PackageItem] = []
         for item in items:
             if action == "install":
-                if item.source == "appimage":
-                    skipped.append(item)
-                    continue
                 cmd = item.install_command(self.tools)
             else:
                 if not item.installed and item.source != "appimage":
@@ -827,7 +829,6 @@ class PkgUI:
             "aur/local",
             "flatpak",
             "apt",
-            "appimage",
             "dnf",
             "zypper",
             "apk",
@@ -1212,8 +1213,8 @@ class PkgUI:
         if not targets:
             self.status = "No package selected."
             return
-        if len(targets) == 1 and targets[0].source == "appimage":
-            self.show_info()
+        if len(targets) == 1 and targets[0].source == "appimage" and targets[0].installed:
+            self.run_appimage(targets[0])
             return
 
         already_installed = [
@@ -1334,20 +1335,60 @@ class PkgUI:
 
         self.spawn_job(f"loading info for {item.package_id}", job)
 
-    def log_appimage_info(self, item: PackageItem) -> None:
-        path = Path(item.package_id)
-        self.log(f"AppImage: {item.name}")
-        self.log(f"path: {path}")
+    def run_appimage(self, item: PackageItem | None = None) -> None:
+        item = item or self.selected_item()
+        if not item or item.source != "appimage" or not item.installed:
+            self.status = "Select an installed AppImage to run."
+            return
+        value = getattr(item, "local_path", "")
+        if not value and item.package_id.startswith("/"):
+            value = item.package_id
+        path = Path(value).expanduser() if value else None
+        if path is None or not path.is_file():
+            self.status = f"AppImage file not found for {item.title()}."
+            return
         try:
-            stat = path.stat()
-            self.log(f"size: {human_size(stat.st_size)}")
-            self.log(f"mode: {oct(stat.st_mode & 0o777)}")
-            self.log(
-                f"modified: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime))}"
+            mode = path.stat().st_mode
+            if not mode & 0o111:
+                path.chmod(stat.S_IMODE(mode) | 0o111)
+            subprocess.Popen(
+                [str(path)],
+                cwd=str(path.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
-            self.log(f"executable: {'yes' if os.access(path, os.X_OK) else 'no'}")
         except OSError as exc:
-            self.log(f"stat failed: {exc}")
+            self.status = f"Could not run {item.title()}: {exc}"
+            return
+        self.status = f"Launched {item.title()}."
+
+    def log_appimage_info(self, item: PackageItem) -> None:
+        self.log(f"AppImage: {item.name}")
+        path_value = item.local_path or (
+            item.package_id if item.package_id.startswith("/") else ""
+        )
+        if path_value:
+            path = Path(path_value).expanduser()
+            self.log(f"path: {path}")
+            try:
+                file_stat = path.stat()
+                self.log(f"size: {human_size(file_stat.st_size)}")
+                self.log(f"mode: {oct(file_stat.st_mode & 0o777)}")
+                self.log(
+                    "modified: "
+                    + time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.localtime(file_stat.st_mtime)
+                    )
+                )
+                self.log(f"executable: {'yes' if os.access(path, os.X_OK) else 'no'}")
+            except OSError as exc:
+                self.log(f"stat failed: {exc}")
+        else:
+            self.log(f"download: {item.origin or 'not available'}")
+            if item.description:
+                self.log(item.description)
         self.mode = "log"
         self.selected = len(self.log_lines) - 1
         self.scroll = 0
@@ -1471,8 +1512,14 @@ class PkgUI:
         if ch == ord("u"):
             self.update_system()
             return
-        if ch in (ord("v"), ord("V")):
+        if ch == ord("v"):
+            self.show_info()
+            return
+        if ch == ord("V"):
             self.show_versions()
+            return
+        if ch == ord("e"):
+            self.run_appimage()
             return
         if ch == ord(" "):
             self.toggle_mark_selected()
@@ -1558,6 +1605,7 @@ class PkgUI:
             "a select all packages currently shown",
             "c clear selected packages",
             "Enter install focused package or selected packages",
+            "e run the focused installed AppImage",
             "x remove focused installed package or selected packages",
             "u update package ecosystems in the background",
             "v show package info in log view",
@@ -1899,7 +1947,9 @@ class PkgUI:
         lines.append("Actions:")
         lines.append("Space select/unselect")
         if item.source == "appimage":
-            lines.append("Enter/v file info")
+            lines.append("Enter run installed / install catalog entry")
+            lines.append("e run installed AppImage")
+            lines.append("v file info")
             lines.append("x remove file in installed view")
         else:
             lines.append("Enter install or info")
@@ -1988,7 +2038,7 @@ class PkgUI:
         if self.marked and "selected:" not in status:
             status = f"{status}  | selected:{len(self.marked)}"
         self.safe_addstr(y + 1, 1, pad(status, w - 2), curses.color_pair(3))
-        keys = "/ search  Space select  Enter install  x remove  V versions  u update  ? help"
+        keys = "/ search  Space select  Enter install  e run AppImage  x remove  V versions  u update  ? help"
         self.safe_addstr(y + 2, 1, pad(keys, w - 2), curses.A_DIM)
 
     def clear_line(self, y: int) -> None:

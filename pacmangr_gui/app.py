@@ -136,6 +136,9 @@ class PacmangrGUI(Gtk.Application):
         self.status_label: Gtk.Label | None = None
         self.busy_spinner: Gtk.Spinner | None = None
         self._busy_tokens: set[str] = set()
+        self._status_text = ""
+        self._status_serial = 0
+        self._operation_status = ""
         self._app_update_timer_started = False
         self._window_state_source = 0
 
@@ -387,10 +390,7 @@ class PacmangrGUI(Gtk.Application):
             if not initial:
                 view.focus()
         elif key == "updates":
-            if not view.loaded:
-                view.refresh()
-            else:
-                view.populate(view.lines)
+            view.refresh()
         elif key == "github":
             if not initial:
                 view.focus()
@@ -485,8 +485,8 @@ class PacmangrGUI(Gtk.Application):
         dialog = SettingsDialog(self)
         dialog.present()
 
-    def apply_settings(self) -> None:
-        """Apply settings live after the dialog saves."""
+    def apply_settings(self, *, show_status: bool = True) -> None:
+        """Apply current settings to the running interface."""
         if SETTINGS.get("auto_update_app", True):
             self._schedule_app_update_checks()
         self.apply_colours()
@@ -506,10 +506,20 @@ class PacmangrGUI(Gtk.Application):
                 )
             elif self.view_mode == "installed" and self.installed_loaded:
                 view.filter_installed()
-            elif hasattr(view, "refresh") and getattr(view, "loaded", False):
+            elif self.view_mode == "updates" and view.loaded:
+                view.populate(view.lines)
+            elif self.view_mode == "github" and view.loaded:
+                view.result_list.populate(
+                    self.items,
+                    view.result_list.heading.get_text(),
+                    auto_select=False,
+                    row_factory=view._make_row,
+                )
+            elif self.view_mode == "orphans":
                 view.refresh()
         self.update_badges()
-        self.set_status("Settings applied.")
+        if show_status:
+            self.set_status("Settings applied.")
 
     def update_badges(self) -> None:
         if not self.sidebar:
@@ -687,7 +697,13 @@ class PacmangrGUI(Gtk.Application):
     # ------------------------------------------------------------------
     # Status, lists and details
     # ------------------------------------------------------------------
-    def set_status(self, text: str, busy: bool = False) -> None:
+    def set_status(
+        self, text: str, busy: bool = False, duration_ms: int = 0
+    ) -> None:
+        previous = self._status_text
+        self._status_serial += 1
+        serial = self._status_serial
+        self._status_text = text
         if self.status_label:
             self.status_label.set_text(text)
         if busy:
@@ -695,6 +711,15 @@ class PacmangrGUI(Gtk.Application):
         else:
             self._busy_tokens.discard("status")
         self._sync_busy_spinner()
+        if duration_ms > 0:
+            def clear_transient() -> bool:
+                if serial != self._status_serial:
+                    return GLib.SOURCE_REMOVE
+                restore = self._operation_status if self.operation_running else previous
+                self.set_status(restore)
+                return GLib.SOURCE_REMOVE
+
+            GLib.timeout_add(duration_ms, clear_transient)
 
     def set_busy(self, busy: bool) -> None:
         if busy:
@@ -1044,6 +1069,7 @@ class PacmangrGUI(Gtk.Application):
     # ------------------------------------------------------------------
     def _begin_operation(self, mode: str, status: str) -> threading.Event:
         self.operation_running = True
+        self._operation_status = status
         self.operation_cancel_event = threading.Event()
         if self.cancel_operation_button:
             self.cancel_operation_button.set_sensitive(True)
@@ -1068,6 +1094,7 @@ class PacmangrGUI(Gtk.Application):
 
     def _end_operation(self) -> None:
         self.operation_running = False
+        self._operation_status = ""
         self.operation_cancel_event = None
         self.end_busy("package-operation")
         if self.cancel_operation_button:
@@ -1188,16 +1215,37 @@ class PacmangrGUI(Gtk.Application):
             def done() -> bool:
                 self._end_operation()
                 self.set_detail_text(output or "Operation completed.")
+                lowered = output.casefold()
+                auth_cancelled = code != 0 and any(
+                    marker in lowered
+                    for marker in (
+                        "authentication failed",
+                        "authentication failure",
+                        "authentication cancelled",
+                        "authentication canceled",
+                        "authorization failed",
+                        "not authorized",
+                        "incorrect password",
+                        "try again",
+                        "timed out reading password",
+                        "a password is required",
+                        "authentication is required",
+                        "operation was cancelled",
+                        "operation was canceled",
+                    )
+                )
                 self.set_status(
                     f"{title} cancelled."
                     if code == 130
+                    else "Authentication failed or expired; no packages were removed."
+                    if auth_cancelled
                     else f"{title} completed."
                     if code == 0
                     else f"{title} failed with code {code}."
                 )
-                if on_done and code == 0:
+                if on_done:
                     on_done()
-                elif code == 130 and self.installed_loaded:
+                elif self.installed_loaded:
                     self.load_installed(force=True)
                 return False
 
@@ -1296,6 +1344,9 @@ class PacmangrGUI(Gtk.Application):
         )
         if (code == 0 or cancelled) and self.installed_loaded:
             self.load_installed(force=True)
+        updates_view = self.views.get("updates")
+        if updates_view:
+            updates_view.refresh()
         return False
 
     # ------------------------------------------------------------------
@@ -1480,6 +1531,21 @@ class PacmangrGUI(Gtk.Application):
             self.set_status(f"{action.title()} failed ({code}): {last_line}")
 
         if self.current_item is item and self.details:
+            if item.source == "appimage" and action == "install":
+                for line in text.splitlines():
+                    if line.startswith("Installed ") and ": " in line:
+                        candidate = line.rsplit(": ", 1)[-1].strip()
+                        if Path(candidate).is_file():
+                            item.local_path = candidate
+                            item.installed = True
+                            break
+            if item.source == "appimage" and action == "remove":
+                item.installed = False
+                if hasattr(item, "local_path"):
+                    del item.local_path
+            if item.source == "appimage":
+                self.details.show(item)
+                self.set_detail_text(text)
             self.details.install_button.set_label(
                 "Reinstall" if item.installed else "Install"
             )
@@ -1488,11 +1554,25 @@ class PacmangrGUI(Gtk.Application):
                     "Update checkout" if item.installed else "Clone repository"
                 )
             self.details.install_button.set_sensitive(
-                item.source != "appimage"
-                and (item.source != "git" or bool(self.tools.git))
+                (item.source == "appimage" and bool(item.origin))
+                or (
+                    item.source != "appimage"
+                    and (item.source != "git" or bool(self.tools.git))
+                )
             )
             self.details.remove_button.set_sensitive(
-                (item.installed or item.source == "appimage") and item.source != "git"
+                item.installed and item.source != "git"
+            )
+            self.details.run_button.set_visible(
+                item.source == "appimage" and item.installed
+            )
+            self.details.run_button.set_sensitive(
+                item.source == "appimage"
+                and item.installed
+                and bool(
+                    getattr(item, "local_path", "")
+                    or item.package_id.startswith("/")
+                )
             )
             self.details.files_button.set_sensitive(bool(item.installed))
         return False

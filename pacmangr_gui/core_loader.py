@@ -69,5 +69,5 @@ def source_choices(tools) -> list[tuple[str, str]]:
     for manager in tools.extra_managers:
         if "search" in CORE.MANAGER_SPECS.get(manager, {}):
             choices.append((manager.replace("-", " ").title(), manager))
-    choices.append(("Local AppImages", "appimage"))
+    choices.append(("AppImages", "appimage"))
     return choices

@@ -13,6 +13,7 @@ from types import ModuleType as _ModuleType
 
 from . import constants as _constants
 from .backends import (
+    search_appimage_catalog,
     appimage_roots,
     collect_installed_packages,
     find_appimages,
@@ -33,6 +34,7 @@ from .cli import (
     run_cli_command,
     run_git_fetch,
     run_pip_install,
+    run_appimage_install,
     usage,
 )
 from .commands import (
@@ -206,6 +208,8 @@ __all__ = [
     "run_cli_command",
     "run_git_fetch",
     "run_pip_install",
+    "run_appimage_install",
+    "search_appimage_catalog",
     "usage",
     "main",
 ]

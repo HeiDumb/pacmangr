@@ -255,7 +255,9 @@ def show_manager_status(tools, sources: list[tuple[str, str]]) -> str:
     lines = []
     for label, key in sources[1:]:
         if key == "appimage":
-            lines.append(f"{label}\nLocal files in Applications folders")
+            lines.append(
+                f"{label}\nAppImage catalog search and executable local files"
+            )
             continue
         if key == "github":
             lines.append(f"{label}\nGitHub repository search (internet required)")

@@ -577,6 +577,7 @@ class UpdatesView(BaseView):
         super().__init__(app, "updates")
         self.loaded = False
         self.checking = False
+        self.refresh_pending = False
         self.busy_token = "updates-check"
         self.lines: list[str] = []
 
@@ -610,6 +611,7 @@ class UpdatesView(BaseView):
 
     def refresh(self) -> None:
         if self.checking:
+            self.refresh_pending = True
             return
         self.checking = True
         self.app.begin_busy(self.busy_token)
@@ -634,6 +636,7 @@ class UpdatesView(BaseView):
                 self.set_placeholder(
                     "Update check failed", error, "dialog-warning-symbolic"
                 )
+            self._start_pending_refresh()
             return False
         self.lines = list(lines)
         self.app.update_lines = lines
@@ -647,7 +650,13 @@ class UpdatesView(BaseView):
                 if lines
                 else "All checked packages are up to date."
             )
+        self._start_pending_refresh()
         return False
+
+    def _start_pending_refresh(self) -> None:
+        if self.refresh_pending:
+            self.refresh_pending = False
+            GLib.idle_add(self.refresh)
 
     def populate(self, lines: list[str]) -> None:
         items = []

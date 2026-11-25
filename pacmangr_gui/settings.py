@@ -11,7 +11,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 from .core_loader import CORE
 
@@ -154,23 +154,13 @@ class SettingsDialog(Gtk.Window):
         }
 
         header = Gtk.HeaderBar()
-        header.set_show_title_buttons(False)
-        header.set_title_widget(
-            Gtk.Label(label="Settings", css_classes=["title-label"])
-        )
-
-        cancel = Gtk.Button(label="Cancel")
-        cancel.connect("clicked", lambda *_: self.close())
-        header.pack_start(cancel)
-
-        apply_btn = Gtk.Button(label="Apply")
-        apply_btn.connect("clicked", lambda *_: self._apply(False))
-        header.pack_end(apply_btn)
-
-        save_btn = Gtk.Button(label="Save & Close")
-        save_btn.add_css_class("suggested-action")
-        save_btn.connect("clicked", lambda *_: self._apply(True))
-        header.pack_end(save_btn)
+        header.set_show_title_buttons(True)
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        title = Gtk.Label(label="Settings", css_classes=["title-label"])
+        subtitle = Gtk.Label(label="Changes save automatically", css_classes=["muted"])
+        title_box.append(title)
+        title_box.append(subtitle)
+        header.set_title_widget(title_box)
         self.set_titlebar(header)
 
         self.stack = Gtk.Stack()
@@ -196,6 +186,9 @@ class SettingsDialog(Gtk.Window):
         self._build_safety()
         self._build_advanced()
         self._build_about()
+        self._autosave_source = 0
+        self._connect_autosave()
+        self.connect("close-request", self._flush_autosave)
 
     # ------------------------------------------------------------------
     # Page helpers
@@ -861,6 +854,38 @@ class SettingsDialog(Gtk.Window):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+    def _connect_autosave(self) -> None:
+        for kind, widget, _extra in self.controls.values():
+            if kind == "switch":
+                widget.connect("notify::active", self._queue_autosave)
+            elif kind == "dropdown":
+                widget.connect("notify::selected", self._queue_autosave)
+            elif kind in {"entry", "file-entry"}:
+                widget.connect("changed", self._queue_autosave)
+            elif kind == "spin":
+                widget.connect("value-changed", self._queue_autosave)
+            elif kind == "checks":
+                for check in widget.values():
+                    check.connect("toggled", self._queue_autosave)
+
+    def _queue_autosave(self, *_args) -> None:
+        if self._autosave_source:
+            GLib.source_remove(self._autosave_source)
+        self._autosave_source = GLib.timeout_add(180, self._save_changes)
+
+    def _flush_autosave(self, *_args) -> bool:
+        if self._autosave_source:
+            GLib.source_remove(self._autosave_source)
+            self._save_changes()
+        return False
+
+    def _save_changes(self) -> bool:
+        self._autosave_source = 0
+        SETTINGS.update(self._collect())
+        if hasattr(self.app, "apply_settings"):
+            self.app.apply_settings(show_status=False)
+        return False
+
     def _collect(self) -> dict:
         values: dict = {}
         for key, (kind, widget, extra) in self.controls.items():
@@ -891,14 +916,6 @@ class SettingsDialog(Gtk.Window):
         else:
             values["compact_rows"] = False
         return values
-
-    def _apply(self, close: bool) -> None:
-        values = self._collect()
-        SETTINGS.update(values)
-        if hasattr(self.app, "apply_settings"):
-            self.app.apply_settings()
-        if close:
-            self.close()
 
     def _on_matugen(self, *_button) -> None:
         from .theme import apply_matugen_from_wallpaper

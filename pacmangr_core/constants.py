@@ -28,6 +28,8 @@ CACHE_DB_PATH = Path.home() / ".cache" / APP_NAME / "pacmangr.sqlite"
 GIT_SOURCE_ROOT = Path.home() / ".local" / "src" / APP_NAME
 CLI_ENTRY_PATH = Path(__file__).resolve().parent.parent / "pacmangr"
 PIP_VENV_ROOT = Path.home() / ".local" / "share" / APP_NAME / "venvs"
+APPIMAGE_ROOT = Path.home() / "Applications"
+APPIMAGE_REGISTRY_PATH = Path.home() / ".local" / "share" / APP_NAME / "appimages.json"
 CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 CACHE_TTL_SECONDS = {
     "pacman": 6 * 60 * 60,

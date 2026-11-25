@@ -90,12 +90,16 @@ class PackageItem:
     repo: str = ""
     installed: bool = False
     origin: str = ""
+    local_path: str = ""
+    catalog_key: str = ""
+    icon_url: str = ""
+    project_url: str = ""
 
     def title(self) -> str:
         if self.source == "flatpak" and self.name != self.package_id:
             return f"{self.name} ({self.package_id})"
         if self.source == "appimage":
-            return f"{self.name} ({self.package_id})"
+            return self.name
         return self.name
 
     def install_command(
@@ -141,7 +145,16 @@ class PackageItem:
                 return [tools.privilege, tools.snap, "install", self.package_id]
             return None
         if self.source == "appimage":
-            return None
+            if not self.origin or self.package_id.startswith("/"):
+                return None
+            return [
+                sys.executable,
+                str(constants.CLI_ENTRY_PATH),
+                "_appimage-install",
+                self.catalog_key or self.package_id.removeprefix("appimage:"),
+                self.name,
+                self.origin,
+            ]
         generic = manager_spec_command(
             self.source, "install", tools, package=self.package_id
         )
@@ -178,8 +191,13 @@ class PackageItem:
                 return [tools.privilege, tools.snap, "remove", self.package_id]
             return None
         if self.source == "appimage":
+            path = getattr(self, "local_path", "")
+            if not path and self.package_id.startswith("/"):
+                path = self.package_id
+            if not path:
+                return None
             rm = shutil.which("rm") or "/usr/bin/rm"
-            return [rm, "-v", self.package_id]
+            return [rm, "-v", path]
         generic = manager_spec_command(
             self.source, "remove", tools, package=self.package_id
         )
@@ -298,6 +316,10 @@ def package_to_dict(item: PackageItem) -> dict[str, object]:
         "repo": item.repo,
         "installed": item.installed,
         "origin": item.origin,
+        "local_path": item.local_path,
+        "catalog_key": item.catalog_key,
+        "icon_url": item.icon_url,
+        "project_url": item.project_url,
     }
 
 
@@ -312,6 +334,10 @@ def package_from_dict(data: dict[str, object]) -> PackageItem:
         repo=str(data.get("repo") or ""),
         installed=bool(data.get("installed")),
         origin=str(data.get("origin") or ""),
+        local_path=str(data.get("local_path") or ""),
+        catalog_key=str(data.get("catalog_key") or ""),
+        icon_url=str(data.get("icon_url") or ""),
+        project_url=str(data.get("project_url") or ""),
     )
 
 
