@@ -1,6 +1,6 @@
 pkgbase = pacmangr
 	pkgdesc = Unified terminal and GTK interface for native package managers
-	pkgver = 0.4.0
+	pkgver = 0.4.1
 	pkgrel = 2
 	url = https://github.com/HeiDumb/pacmangr
 	arch = any
@@ -24,7 +24,7 @@ pkgbase = pacmangr
 	optdepends = pipx: Python application support
 	optdepends = ruby: gem package support
 	optdepends = luarocks: Lua package support
-	source = pacmangr-0.4.0.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/tags/0.4.0.tar.gz
-	sha256sums = 3ba5c09475582636ab0758611f7d547cc542c01896fee6e0525915da2e30e4db
+	source = pacmangr-0.4.1.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/tags/0.4.1.tar.gz
+	sha256sums = 392dfc38cb520384ce5951d622bbf000a48ba3238bbc5593387206402f062da6
 
 pkgname = pacmangr

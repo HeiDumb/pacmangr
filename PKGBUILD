@@ -26,7 +26,7 @@ optdepends=(
 )
 
 source=("pacmangr-${pkgver}.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/tags/${pkgver}.tar.gz")
-sha256sums=('3ba5c09475582636ab0758611f7d547cc542c01896fee6e0525915da2e30e4db')
+sha256sums=('392dfc38cb520384ce5951d622bbf000a48ba3238bbc5593387206402f062da6')
 
 package() {
   local srcdir_repo="$srcdir/pacmangr-$pkgver"
