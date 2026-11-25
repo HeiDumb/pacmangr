@@ -87,7 +87,7 @@ Pacmangr only shows a backend after its executable is detected.
 | Universal apps | `flatpak`, local AppImages |
 | Developer tools | `cargo`, `npm`, `pip`, `pipx`, `gem`, `luarocks` |
 | Other environments | `brew`, `nix-env`, `opkg`, FreeBSD `pkg`, `guix` |
-| Source repositories | Git URLs, managed under `~/.local/src/pacmangr` |
+| Source repositories | Git URLs, managed directly under your home directory (`~/repository`) |
 
 ## Installation
 
@@ -290,7 +290,10 @@ pacmangr install requests --source pip --scope user
 pacmangr install requests --source pip --scope system
 ```
 
-Git URLs are cloned or fast-forwarded under `~/.local/src/pacmangr`:
+Git URLs are cloned or fast-forwarded directly under your home directory. For
+example, `https://github.com/owner/project.git` is stored at `~/project` (with
+a collision-safe owner-qualified name if that path already belongs to another
+repository):
 
 ```sh
 pacmangr install https://github.com/owner/project.git --source git

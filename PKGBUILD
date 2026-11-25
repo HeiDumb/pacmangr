@@ -25,11 +25,11 @@ optdepends=(
   'luarocks: Lua package support'
 )
 
-source=("pacmangr-main.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/heads/main.tar.gz")
-sha256sums=('SKIP')
+source=("pacmangr-${pkgver}.tar.gz::https://github.com/HeiDumb/pacmangr/archive/refs/tags/${pkgver}.tar.gz")
+sha256sums=('3ba5c09475582636ab0758611f7d547cc542c01896fee6e0525915da2e30e4db')
 
 package() {
-  local srcdir_repo="$srcdir/pacmangr-main"
+  local srcdir_repo="$srcdir/pacmangr-$pkgver"
 
   install -Dm755 "$srcdir_repo/pacmangr" \
     "$pkgdir/usr/bin/pacmangr"

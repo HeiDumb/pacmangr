@@ -25,7 +25,7 @@ SEARCH_TIMEOUT_SECONDS = {
     "pipx": 8,
 }
 CACHE_DB_PATH = Path.home() / ".cache" / APP_NAME / "pacmangr.sqlite"
-GIT_SOURCE_ROOT = Path.home() / ".local" / "src" / APP_NAME
+GIT_SOURCE_ROOT = Path.home()
 CLI_ENTRY_PATH = Path(__file__).resolve().parent.parent / "pacmangr"
 PIP_VENV_ROOT = Path.home() / ".local" / "share" / APP_NAME / "venvs"
 APPIMAGE_ROOT = Path.home() / "Applications"

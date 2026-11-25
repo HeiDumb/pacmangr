@@ -109,7 +109,7 @@ class PackageItem:
             if not tools.git or not self.origin:
                 return None
             target = Path(self.package_id)
-            if (target / ".git").is_dir():
+            if (target / ".git").exists():
                 return [tools.git, "-C", str(target), "pull", "--ff-only"]
             return [
                 sys.executable,

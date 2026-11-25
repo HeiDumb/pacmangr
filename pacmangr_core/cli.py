@@ -189,9 +189,23 @@ def run_git_fetch(url: str, target_value: str) -> int:
     if target.exists():
         print(f"checkout already exists: {target}", file=sys.stderr)
         return 1
-    return subprocess.run(
+    code = subprocess.run(
         [git, "clone", "--filter=blob:none", url, str(target)], check=False
     ).returncode
+    if code:
+        return code
+    try:
+        exclude = target / ".git" / "info" / "exclude"
+        current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if ".pacmangr-managed" not in current.splitlines():
+            with exclude.open("a", encoding="utf-8") as stream:
+                stream.write("\n.pacmangr-managed\n")
+        (target / ".pacmangr-managed").write_text(
+            url.strip() + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"warning: checkout created but Pacmangr could not mark it: {exc}", file=sys.stderr)
+    return 0
 
 
 def run_pip_install(scope: str, package: str) -> int:

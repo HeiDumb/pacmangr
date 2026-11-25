@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import threading
 import time
 import urllib.parse
@@ -233,17 +234,48 @@ def is_git_url(value: str) -> bool:
 
 
 def git_checkout_slug(url: str) -> str:
+    """Return the repository name so clones land directly under the home folder."""
+    parts = _git_url_parts(url)
+    slug = parts[-1].strip("-.") if parts else ""
+    return slug or "repository"
+
+
+def _git_url_parts(url: str) -> list[str]:
     candidate = url.strip().rstrip("/")
     if re.match(r"^[\w.-]+@[\w.-]+:", candidate):
         path = candidate.split(":", 1)[1]
     else:
         path = urllib.parse.urlparse(candidate).path.lstrip("/")
     path = re.sub(r"\.git$", "", path)
-    parts = [
+    return [
         re.sub(r"[^A-Za-z0-9_.+-]+", "-", part) for part in path.split("/") if part
     ]
-    slug = "--".join(parts[-2:]) if parts else "repository"
-    return slug.strip("-.") or "repository"
+
+
+def _normalized_git_remote(url: str) -> str:
+    candidate = url.strip()
+    scp_match = re.match(r"^[\w.-]+@([\w.-]+):([\w./-]+)$", candidate)
+    if scp_match:
+        host, path = scp_match.groups()
+        normalized_path = re.sub(r"\.git$", "", path)
+        return f"{host}/{normalized_path}".casefold().rstrip("/")
+    parsed = urllib.parse.urlsplit(candidate)
+    if parsed.scheme == "file":
+        return str(Path(urllib.request.url2pathname(parsed.path)).resolve()).casefold()
+    if parsed.hostname:
+        path = re.sub(r"\.git$", "", parsed.path).strip("/")
+        return f"{parsed.hostname.casefold()}/{path.casefold()}"
+    return candidate.casefold().removesuffix(".git").rstrip("/")
+
+
+def _checkout_matches_remote(target: Path, url: str) -> bool:
+    git = shutil.which("git")
+    if not git or target.is_symlink() or not (target / ".git").exists():
+        return False
+    code, remote = run_capture(
+        [git, "-C", str(target), "remote", "get-url", "origin"], timeout=5
+    )
+    return code == 0 and _normalized_git_remote(remote) == _normalized_git_remote(url)
 
 
 def git_package(url: str) -> PackageItem | None:
@@ -252,43 +284,67 @@ def git_package(url: str) -> PackageItem | None:
     clean_url = url.strip()
     slug = git_checkout_slug(clean_url)
     target = constants.GIT_SOURCE_ROOT / slug
-    name = slug.split("--")[-1]
+    parts = _git_url_parts(clean_url)
+    if target.exists() and not _checkout_matches_remote(target, clean_url):
+        owner = parts[-2] if len(parts) > 1 else "repository"
+        collision_slug = f"{owner}--{slug}"
+        target = constants.GIT_SOURCE_ROOT / collision_slug
+        suffix = 2
+        while target.exists() and not _checkout_matches_remote(target, clean_url):
+            target = constants.GIT_SOURCE_ROOT / f"{collision_slug}-{suffix}"
+            suffix += 1
+    name = slug
     return PackageItem(
         source="git",
         manager="git",
         name=name,
         package_id=str(target),
         repo="managed Git checkout",
-        installed=(target / ".git").is_dir(),
+        installed=_checkout_matches_remote(target, clean_url),
         origin=clean_url,
         description=f"Fetch {clean_url} into {target}. Pacmangr will not execute repository build scripts automatically.",
     )
 
 
 def managed_git_checkouts(tools: Tools) -> list[PackageItem]:
-    if not tools.git or not constants.GIT_SOURCE_ROOT.is_dir():
+    if not tools.git:
         return []
     items: list[PackageItem] = []
-    for target in sorted(constants.GIT_SOURCE_ROOT.iterdir()):
-        if not (target / ".git").is_dir():
+    roots = (
+        (constants.GIT_SOURCE_ROOT, True),
+        (Path.home() / ".local" / "src" / constants.APP_NAME, False),
+    )
+    visited: set[Path] = set()
+    for root, require_marker in roots:
+        if not root.is_dir():
             continue
-        code, output = run_capture(
-            [tools.git, "-C", str(target), "remote", "get-url", "origin"], timeout=5
-        )
-        url = output.strip() if code == 0 else ""
-        item = git_package(url) if url else None
-        if item is None:
-            item = PackageItem(
-                "git",
-                "git",
-                target.name,
-                str(target),
-                installed=True,
-                repo="managed Git checkout",
+        resolved_root = root.resolve()
+        if resolved_root in visited:
+            continue
+        visited.add(resolved_root)
+        for target in sorted(root.iterdir()):
+            if not (target / ".git").exists():
+                continue
+            if require_marker and not (target / ".pacmangr-managed").is_file():
+                continue
+            code, output = run_capture(
+                [tools.git, "-C", str(target), "remote", "get-url", "origin"],
+                timeout=5,
             )
-        item.package_id = str(target)
-        item.installed = True
-        items.append(item)
+            url = output.strip() if code == 0 else ""
+            item = git_package(url) if url else None
+            if item is None:
+                item = PackageItem(
+                    "git",
+                    "git",
+                    target.name,
+                    str(target),
+                    installed=True,
+                    repo="managed Git checkout",
+                )
+            item.package_id = str(target.resolve())
+            item.installed = True
+            items.append(item)
     return items
 
 

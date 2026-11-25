@@ -274,7 +274,7 @@ class GuiOperationCommandTests(unittest.TestCase):
         item = GUI.CORE.git_package("https://github.com/example/demo.git")
         self.assertIsNotNone(item)
         self.assertEqual(item.source, "git")
-        self.assertTrue(item.package_id.endswith("/.local/src/pacmangr/example--demo"))
+        self.assertTrue(item.package_id.endswith("/demo"))
 
     @unittest.skipUnless(shutil.which("git"), "git is required")
     def test_git_fetch_clones_into_managed_root(self):
